@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,10 +12,11 @@ import (
 	"github.com/6abe/kage/internal/doctor"
 	"github.com/6abe/kage/internal/host"
 	"github.com/6abe/kage/internal/hypr"
+	"github.com/6abe/kage/internal/mcp"
 	"github.com/6abe/kage/internal/see"
 )
 
-const usage = "kage windows|monitors|doctor|see|focus|type|press|click|hotkey|dispatch [--human]"
+const usage = "kage windows|monitors|doctor|see|focus|type|press|click|hotkey|dispatch|mcp [--human]"
 
 type fail struct {
 	OK      bool          `json:"ok"`
@@ -60,7 +62,7 @@ func Run(h host.Host, args []string, stdout, stderr io.Writer) int {
 	}
 	switch inv.cmd {
 	case "help":
-		msg := usage + "\n  see [--monitor NAME|--all] [--window ADDRESS|CLASS|TITLE] [--annotate] [--path FILE] [--max-width N]\n  focus --window ADDRESS|CLASS|TITLE\n  type TEXT [--window ADDRESS|CLASS|TITLE] [--clear] [--yes]\n  press KEY [--window ADDRESS|CLASS|TITLE] [--yes]\n  click --at X,Y | --on ID [--snapshot ID] [--button left|right|middle] [--window ADDRESS] [--yes]\n  hotkey CHORD [--yes]\n  dispatch <hyprctl dispatch args...>\n  --clear sends Ctrl+A then TEXT (empty TEXT also sends BackSpace)\n  click/type/press/hotkey need --yes, KAGE_ALLOW_INPUT=1, or allow_input = true in config"
+		msg := usage + "\n  see [--monitor NAME|--all] [--window ADDRESS|CLASS|TITLE] [--annotate] [--path FILE] [--max-width N]\n  focus --window ADDRESS|CLASS|TITLE\n  type TEXT [--window ADDRESS|CLASS|TITLE] [--clear] [--yes]\n  press KEY [--window ADDRESS|CLASS|TITLE] [--yes]\n  click --at X,Y | --on ID [--snapshot ID] [--button left|right|middle] [--window ADDRESS] [--yes]\n  hotkey CHORD [--yes]\n  dispatch <hyprctl dispatch args...>\n  mcp\n  --clear sends Ctrl+A then TEXT (empty TEXT also sends BackSpace)\n  click/type/press/hotkey need --yes, KAGE_ALLOW_INPUT=1, or allow_input = true in config"
 		if inv.human {
 			fmt.Fprintln(stdout, msg)
 			return 0
@@ -116,6 +118,14 @@ func Run(h host.Host, args []string, stdout, stderr io.Writer) int {
 			return code
 		}
 		return runDispatch(h, inv, stdout, stderr)
+	case "mcp":
+		if code := rejectExtra(inv, stderr); code != 0 {
+			return code
+		}
+		if err := mcp.Serve(context.Background(), h, Run); err != nil {
+			return writeFail(stderr, err.Error(), "")
+		}
+		return 0
 	default:
 		return writeFail(stderr, "unknown command: "+inv.cmd, usage)
 	}

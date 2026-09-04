@@ -1091,3 +1091,23 @@ func TestSeeFlagsRejectedOnOtherCommands(t *testing.T) {
 		t.Fatalf("monitors --all: %s", errb)
 	}
 }
+
+func TestMCPRejectsExtraArgs(t *testing.T) {
+	out, errb, code := execCLI(okHost(), "mcp", "nope")
+	if code == 0 || out != "" {
+		t.Fatalf("exit %d stdout=%s", code, out)
+	}
+	if !strings.Contains(errb, "unexpected arguments") {
+		t.Fatalf("stderr: %s", errb)
+	}
+}
+
+func TestHelpListsMCP(t *testing.T) {
+	out, _, code := execCLI(okHost(), "help")
+	if code != 0 {
+		t.Fatal(out)
+	}
+	if !strings.Contains(out, "mcp") {
+		t.Fatalf("help: %s", out)
+	}
+}
