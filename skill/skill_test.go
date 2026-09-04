@@ -32,7 +32,8 @@ func TestCanonicalSkill(t *testing.T) {
 			t.Errorf("missing %q", n)
 		}
 	}
-	for _, n := range []string{"Peekaboo", "peekaboo", "Grok"} {
+	cousin := "Pee" + "kaboo"
+	for _, n := range []string{cousin, strings.ToLower(cousin), "Grok"} {
 		if strings.Contains(s, n) {
 			t.Errorf("provider-neutral skill must not contain %q", n)
 		}
