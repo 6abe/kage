@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/6abe/kage/internal/capture"
 	"github.com/6abe/kage/internal/host"
 )
 
@@ -155,12 +156,8 @@ func dash(s string) string {
 }
 
 func probeCapture(h host.Host) error {
-	dir := h.Env("XDG_RUNTIME_DIR")
-	if dir == "" {
-		dir = os.TempDir()
-	}
-	dir = filepath.Join(dir, "kage")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	dir := capture.Dir(h)
+	if err := capture.Ensure(dir); err != nil {
 		return err
 	}
 	path := filepath.Join(dir, "doctor-probe.png")

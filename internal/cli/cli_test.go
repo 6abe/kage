@@ -3,6 +3,12 @@ package cli_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"image/png"
+	"io"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -35,6 +41,7 @@ const clientsJSON = `[
     "monitor": 1,
     "class": "google-chrome",
     "title": "GitHub",
+    "pid": 4321,
     "focusHistoryID": 0
   },
   {
@@ -47,6 +54,7 @@ const clientsJSON = `[
     "monitor": 1,
     "class": "kitty",
     "title": "term",
+    "pid": 99,
     "focusHistoryID": 1
   }
 ]`
@@ -344,6 +352,323 @@ func TestHyprctlFailureHint(t *testing.T) {
 	}
 	if !strings.Contains(errb, `"ok":false`) {
 		t.Fatalf("stderr: %s", errb)
+	}
+}
+
+func seeHost(t *testing.T) *host.Fake {
+	t.Helper()
+	h := okHost()
+	h.Environ["XDG_RUNTIME_DIR"] = t.TempDir()
+	return h
+}
+
+type seePayload struct {
+	OK         bool   `json:"ok"`
+	SnapshotID string `json:"snapshot_id"`
+	Path       string `json:"path"`
+	Width      int    `json:"width"`
+	Height     int    `json:"height"`
+	Monitor    struct {
+		Name   string  `json:"name"`
+		X      int     `json:"x"`
+		Y      int     `json:"y"`
+		Width  int     `json:"width"`
+		Height int     `json:"height"`
+		Scale  float64 `json:"scale"`
+	} `json:"monitor"`
+	Focused *struct {
+		Address   string `json:"address"`
+		Class     string `json:"class"`
+		Title     string `json:"title"`
+		At        [2]int `json:"at"`
+		Size      [2]int `json:"size"`
+		Workspace int    `json:"workspace"`
+		PID       int    `json:"pid"`
+	} `json:"focused"`
+	Windows []struct {
+		ID        int    `json:"id"`
+		Address   string `json:"address"`
+		Class     string `json:"class"`
+		Title     string `json:"title"`
+		At        [2]int `json:"at"`
+		Size      [2]int `json:"size"`
+		Workspace int    `json:"workspace"`
+		Monitor   string `json:"monitor"`
+		Floating  bool   `json:"floating"`
+		Mapped    bool   `json:"mapped"`
+		Focus     bool   `json:"focus"`
+	} `json:"windows"`
+	CoordinateSpace string `json:"coordinate_space"`
+}
+
+var snapshotIDRe = regexp.MustCompile(`^kage_\d{8}_\d{6}_[0-9a-f]{4}$`)
+
+func decodeSee(t *testing.T, out string) seePayload {
+	t.Helper()
+	var p seePayload
+	if err := json.Unmarshal([]byte(out), &p); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	return p
+}
+
+func assertPNGFile(t *testing.T, path string) (w, h int) {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer f.Close()
+	var hdr [8]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		t.Fatal(err)
+	}
+	if string(hdr[:]) != "\x89PNG\r\n\x1a\n" {
+		t.Fatalf("not a PNG: %q", hdr)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := png.DecodeConfig(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg.Width, cfg.Height
+}
+
+func TestSeeJSONAndPNG(t *testing.T) {
+	h := seeHost(t)
+	out, errb, code := execCLI(h, "see")
+	if code != 0 {
+		t.Fatalf("exit %d stderr=%s", code, errb)
+	}
+	if errb != "" {
+		t.Fatalf("stderr: %s", errb)
+	}
+	p := decodeSee(t, out)
+	if !p.OK {
+		t.Fatal("ok false")
+	}
+	if !snapshotIDRe.MatchString(p.SnapshotID) {
+		t.Fatalf("snapshot_id %q", p.SnapshotID)
+	}
+	if p.CoordinateSpace != "global_compositor_pixels" {
+		t.Fatalf("coordinate_space %q", p.CoordinateSpace)
+	}
+	if p.Monitor.Name != "DP-1" || p.Monitor.Width != 5120 || p.Monitor.Height != 1440 || p.Monitor.Scale != 1.5 {
+		t.Fatalf("monitor %+v", p.Monitor)
+	}
+	if p.Focused == nil || p.Focused.Address != "0x123" || p.Focused.Class != "google-chrome" || p.Focused.PID != 4321 {
+		t.Fatalf("focused %+v", p.Focused)
+	}
+	if p.Focused.At != [2]int{100, 80} || p.Focused.Size != [2]int{1400, 900} || p.Focused.Workspace != 1 {
+		t.Fatalf("focused geom %+v", p.Focused)
+	}
+	if len(p.Windows) != 2 || p.Windows[0].ID != 1 || p.Windows[1].ID != 2 {
+		t.Fatalf("windows %+v", p.Windows)
+	}
+	if p.Windows[0].At != [2]int{100, 80} || p.Windows[0].Size != [2]int{1400, 900} || !p.Windows[0].Focus {
+		t.Fatalf("window0 %+v", p.Windows[0])
+	}
+	if !p.Windows[1].Floating || p.Windows[1].Focus {
+		t.Fatalf("window1 %+v", p.Windows[1])
+	}
+	if len(h.GrimArgs) != 3 || h.GrimArgs[0] != "-o" || h.GrimArgs[1] != "DP-1" {
+		t.Fatalf("grim argv %q", h.GrimArgs)
+	}
+	if h.GrimArgs[2] != p.Path {
+		t.Fatalf("grim out %q path %q", h.GrimArgs[2], p.Path)
+	}
+	runtime := h.Environ["XDG_RUNTIME_DIR"]
+	dir := filepath.Join(runtime, "kage")
+	if filepath.Dir(p.Path) != dir {
+		t.Fatalf("path %s not under %s", p.Path, dir)
+	}
+	if !strings.HasSuffix(p.Path, p.SnapshotID+".png") {
+		t.Fatalf("filename %s id %s", p.Path, p.SnapshotID)
+	}
+	st, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o700 {
+		t.Fatalf("dir mode %o", st.Mode().Perm())
+	}
+	w, ht := assertPNGFile(t, p.Path)
+	if p.Width != w || p.Height != ht {
+		t.Fatalf("json %dx%d file %dx%d", p.Width, p.Height, w, ht)
+	}
+	if strings.Contains(out, "base64") || strings.Contains(out, "iVBORw0KGgo") {
+		t.Fatalf("JSON must not carry image bytes: %s", out)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{
+		"ok", "snapshot_id", "path", "width", "height", "monitor", "focused", "windows", "coordinate_space",
+	} {
+		if _, ok := raw[key]; !ok {
+			t.Fatalf("missing key %s in %s", key, out)
+		}
+	}
+	for _, banned := range []string{"image", "bytes", "base64", "png_b64", "data"} {
+		if _, ok := raw[banned]; ok {
+			t.Fatalf("banned key %s in %s", banned, out)
+		}
+	}
+}
+
+func TestSeePathFlag(t *testing.T) {
+	h := seeHost(t)
+	path := filepath.Join(t.TempDir(), "nested", "shot.png")
+	out, errb, code := execCLI(h, "see", "--path", path)
+	if code != 0 {
+		t.Fatalf("exit %d stderr=%s", code, errb)
+	}
+	p := decodeSee(t, out)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Path != abs {
+		t.Fatalf("path %s want %s", p.Path, abs)
+	}
+	assertPNGFile(t, abs)
+	if len(h.GrimArgs) != 3 || h.GrimArgs[0] != "-o" || h.GrimArgs[2] != abs {
+		t.Fatalf("grim argv %q", h.GrimArgs)
+	}
+	out, _, code = execCLI(seeHost(t), "see", "--path="+path+".eq.png")
+	if code != 0 {
+		t.Fatalf("equals form exit %d", code)
+	}
+	p = decodeSee(t, out)
+	if !strings.HasSuffix(p.Path, "shot.png.eq.png") {
+		t.Fatalf("equals path %s", p.Path)
+	}
+	assertPNGFile(t, p.Path)
+}
+
+func TestSeeDefaultFocusedMonitor(t *testing.T) {
+	h := seeHost(t)
+	h.JSON["monitors"] = []byte(`[
+		{"id":0,"name":"HDMI-A-1","x":5120,"y":0,"width":1920,"height":1080,"scale":1,"focused":false},
+		{"id":1,"name":"DP-1","x":0,"y":0,"width":5120,"height":1440,"scale":1.5,"focused":true}
+	]`)
+	out, errb, code := execCLI(h, "see")
+	if code != 0 {
+		t.Fatalf("exit %d stderr=%s", code, errb)
+	}
+	p := decodeSee(t, out)
+	if p.Monitor.Name != "DP-1" {
+		t.Fatalf("captured %s", p.Monitor.Name)
+	}
+	if len(h.GrimArgs) < 2 || h.GrimArgs[0] != "-o" || h.GrimArgs[1] != "DP-1" {
+		t.Fatalf("grim argv %q", h.GrimArgs)
+	}
+	joined := strings.Join(h.GrimArgs, " ")
+	if strings.Contains(joined, "0,0,1,1") || strings.Contains(joined, "slurp") {
+		t.Fatalf("invalid grim geometry: %q", h.GrimArgs)
+	}
+}
+
+func TestSeeFallbackDir(t *testing.T) {
+	h := seeHost(t)
+	delete(h.Environ, "XDG_RUNTIME_DIR")
+	out, errb, code := execCLI(h, "see")
+	if code != 0 {
+		t.Fatalf("exit %d stderr=%s", code, errb)
+	}
+	p := decodeSee(t, out)
+	wantDir := filepath.Join(os.TempDir(), fmt.Sprintf("kage-%d", os.Getuid()))
+	if filepath.Dir(p.Path) != wantDir {
+		t.Fatalf("path %s want under %s", p.Path, wantDir)
+	}
+	assertPNGFile(t, p.Path)
+	st, err := os.Stat(wantDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o700 {
+		t.Fatalf("fallback dir mode %o", st.Mode().Perm())
+	}
+	t.Cleanup(func() { _ = os.Remove(p.Path) })
+}
+
+func TestSeeHuman(t *testing.T) {
+	h := seeHost(t)
+	out, errb, code := execCLI(h, "see", "--human")
+	if code != 0 || errb != "" {
+		t.Fatalf("exit %d stderr=%s", code, errb)
+	}
+	if strings.HasPrefix(strings.TrimSpace(out), "{") {
+		t.Fatalf("human see is JSON: %s", out)
+	}
+	if !strings.Contains(out, "DP-1") {
+		t.Fatalf("human see: %s", out)
+	}
+	if len(h.GrimArgs) != 3 || h.GrimArgs[0] != "-o" {
+		t.Fatalf("human still captures: %q", h.GrimArgs)
+	}
+	assertPNGFile(t, h.GrimArgs[2])
+}
+
+func TestSeeFocusedNull(t *testing.T) {
+	h := seeHost(t)
+	h.JSON["activewindow"] = []byte(`{"address":"0xdead"}`)
+	out, errb, code := execCLI(h, "see")
+	if code != 0 {
+		t.Fatalf("exit %d stderr=%s", code, errb)
+	}
+	p := decodeSee(t, out)
+	if p.Focused != nil {
+		t.Fatalf("focused %+v", p.Focused)
+	}
+	if !strings.Contains(out, `"focused":null`) {
+		t.Fatalf("want focused null: %s", out)
+	}
+	assertPNGFile(t, p.Path)
+}
+
+func TestSeeErrors(t *testing.T) {
+	h := seeHost(t)
+	delete(h.Paths, "grim")
+	out, errb, code := execCLI(h, "see")
+	if code == 0 || out != "" {
+		t.Fatalf("missing grim: exit %d stdout=%s", code, out)
+	}
+	if !strings.Contains(errb, `"ok":false`) || !strings.Contains(errb, "omarchy pkg add grim") {
+		t.Fatalf("grim hint: %s", errb)
+	}
+
+	h = seeHost(t)
+	h.Probe = errString("grim exploded")
+	out, errb, code = execCLI(h, "see")
+	if code == 0 || out != "" {
+		t.Fatalf("grim fail: exit %d stdout=%s", code, out)
+	}
+	if !strings.Contains(errb, "grim exploded") {
+		t.Fatalf("stderr: %s", errb)
+	}
+
+	h = seeHost(t)
+	h.JSON["monitors"] = []byte(`[{"id":1,"name":"DP-1","x":0,"y":0,"width":10,"height":10,"scale":1,"focused":false}]`)
+	_, errb, code = execCLI(h, "see")
+	if code == 0 || !strings.Contains(errb, "no focused monitor") {
+		t.Fatalf("no focus: exit %d %s", code, errb)
+	}
+
+	_, errb, code = execCLI(seeHost(t), "see", "--annotate")
+	if code == 0 || !strings.Contains(errb, "unknown flag: --annotate") {
+		t.Fatalf("annotate: %s", errb)
+	}
+	_, errb, code = execCLI(seeHost(t), "see", "--path")
+	if code == 0 || !strings.Contains(errb, "flag --path requires a file path") {
+		t.Fatalf("--path missing: %s", errb)
+	}
+	_, errb, code = execCLI(okHost(), "windows", "--path", "/tmp/x.png")
+	if code == 0 || !strings.Contains(errb, "unknown flag: --path") {
+		t.Fatalf("windows --path: %s", errb)
 	}
 }
 

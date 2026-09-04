@@ -1,6 +1,13 @@
 package host
 
-import "fmt"
+import (
+	"fmt"
+	"image"
+	"image/png"
+	"os"
+	"path/filepath"
+	"strings"
+)
 
 // Fake is an in-memory Host for tests. It never talks to a compositor.
 type Fake struct {
@@ -43,7 +50,33 @@ func (f *Fake) LookPath(name string) (string, error) {
 
 func (f *Fake) Grim(args ...string) error {
 	f.GrimArgs = append([]string(nil), args...)
-	return f.Probe
+	if f.Probe != nil {
+		return f.Probe
+	}
+	if len(args) == 0 {
+		return fmt.Errorf("grim: missing output")
+	}
+	out := args[len(args)-1]
+	if strings.HasPrefix(out, "-") {
+		return fmt.Errorf("grim: missing output")
+	}
+	return writeFakePNG(out)
+}
+
+func writeFakePNG(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	img := image.NewRGBA(image.Rect(0, 0, 8, 4))
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	err = png.Encode(f, img)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 func (f *Fake) DefaultClient() string {

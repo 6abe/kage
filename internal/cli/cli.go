@@ -9,6 +9,7 @@ import (
 	"github.com/6abe/kage/internal/doctor"
 	"github.com/6abe/kage/internal/host"
 	"github.com/6abe/kage/internal/hypr"
+	"github.com/6abe/kage/internal/see"
 )
 
 type fail struct {
@@ -27,53 +28,79 @@ type monitorsOut struct {
 	Monitors []hypr.Monitor `json:"monitors"`
 }
 
+const usage = "kage windows|monitors|doctor|see [--path FILE] [--human]"
+
+type parsed struct {
+	cmd   string
+	human bool
+	path  string
+}
+
 // Run is the kage CLI. Tests call this with a fake Host.
 func Run(h host.Host, args []string, stdout, stderr io.Writer) int {
-	cmd, human, err := parseArgs(args)
+	p, err := parseArgs(args)
 	if err != nil {
-		return writeFail(stderr, err.Error(), "kage windows|monitors|doctor [--human]")
+		return writeFail(stderr, err.Error(), usage)
 	}
-	switch cmd {
+	switch p.cmd {
 	case "help":
-		msg := "kage windows|monitors|doctor [--human]"
-		if human {
-			fmt.Fprintln(stdout, msg)
+		if p.human {
+			fmt.Fprintln(stdout, usage)
 			return 0
 		}
-		return writeJSON(stdout, map[string]any{"ok": true, "usage": msg})
+		return writeJSON(stdout, map[string]any{"ok": true, "usage": usage})
 	case "windows":
-		return runWindows(h, human, stdout, stderr)
+		return runWindows(h, p.human, stdout, stderr)
 	case "monitors":
-		return runMonitors(h, human, stdout, stderr)
+		return runMonitors(h, p.human, stdout, stderr)
 	case "doctor":
-		return runDoctor(h, human, stdout, stderr)
+		return runDoctor(h, p.human, stdout, stderr)
+	case "see":
+		return runSee(h, p.human, p.path, stdout, stderr)
 	default:
-		return writeFail(stderr, "unknown command: "+cmd, "kage windows|monitors|doctor [--human]")
+		return writeFail(stderr, "unknown command: "+p.cmd, usage)
 	}
 }
 
-func parseArgs(args []string) (cmd string, human bool, err error) {
+func parseArgs(args []string) (parsed, error) {
+	var p parsed
 	var pos []string
-	for _, a := range args {
-		switch a {
-		case "--human":
-			human = true
-		case "--help", "-h":
-			return "help", human, nil
-		default:
-			if strings.HasPrefix(a, "-") {
-				return "", false, fmt.Errorf("unknown flag: %s", a)
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--human":
+			p.human = true
+		case a == "--help" || a == "-h":
+			p.cmd = "help"
+			return p, nil
+		case a == "--path":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return parsed{}, fmt.Errorf("flag --path requires a file path")
 			}
+			i++
+			p.path = args[i]
+		case strings.HasPrefix(a, "--path="):
+			p.path = strings.TrimPrefix(a, "--path=")
+			if p.path == "" {
+				return parsed{}, fmt.Errorf("flag --path requires a file path")
+			}
+		case strings.HasPrefix(a, "-"):
+			return parsed{}, fmt.Errorf("unknown flag: %s", a)
+		default:
 			pos = append(pos, a)
 		}
 	}
 	if len(pos) == 0 {
-		return "", human, fmt.Errorf("usage: kage windows|monitors|doctor [--human]")
+		return parsed{}, fmt.Errorf("usage: %s", usage)
 	}
 	if len(pos) > 1 {
-		return "", human, fmt.Errorf("unexpected arguments: %s", strings.Join(pos[1:], " "))
+		return parsed{}, fmt.Errorf("unexpected arguments: %s", strings.Join(pos[1:], " "))
 	}
-	return pos[0], human, nil
+	p.cmd = pos[0]
+	if p.path != "" && p.cmd != "see" {
+		return parsed{}, fmt.Errorf("unknown flag: --path")
+	}
+	return p, nil
 }
 
 func runWindows(h host.Host, human bool, stdout, stderr io.Writer) int {
@@ -128,6 +155,29 @@ func runMonitors(h host.Host, human bool, stdout, stderr io.Writer) int {
 		return 0
 	}
 	return writeJSON(stdout, monitorsOut{OK: true, Monitors: mons})
+}
+
+func runSee(h host.Host, human bool, outPath string, stdout, stderr io.Writer) int {
+	if _, err := h.LookPath("hyprctl"); err != nil {
+		return writeFail(stderr, "hyprctl not found", host.ToolHint("hyprctl"))
+	}
+	if _, err := h.LookPath("grim"); err != nil {
+		return writeFail(stderr, "grim not found", host.ToolHint("grim"))
+	}
+	snap, err := see.Capture(h, outPath)
+	if err != nil {
+		hint := hyprHint(h)
+		if strings.Contains(err.Error(), "grim") && h.Env("WAYLAND_DISPLAY") == "" {
+			hint = "set WAYLAND_DISPLAY (Hyprland session)"
+		}
+		return writeFail(stderr, err.Error(), hint)
+	}
+	if human {
+		fmt.Fprintf(stdout, "%s  %s  %dx%d  %s\n",
+			snap.SnapshotID, snap.Monitor.Name, snap.Width, snap.Height, snap.Path)
+		return 0
+	}
+	return writeJSON(stdout, snap)
 }
 
 func runDoctor(h host.Host, human bool, stdout, stderr io.Writer) int {

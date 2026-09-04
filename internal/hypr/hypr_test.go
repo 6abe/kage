@@ -13,7 +13,7 @@ func TestListWindowsMonitorNameAndFocus(t *testing.T) {
 			"clients": []byte(`[{
 				"address":"0xabc","mapped":true,"at":[1,2],"size":[3,4],
 				"workspace":{"id":9,"name":"9"},"monitor":1,"class":"a","title":"b",
-				"floating":false,"focusHistoryID":0
+				"pid":4321,"floating":false,"focusHistoryID":0
 			}]`),
 			"activewindow": []byte(`{"address":"0xabc"}`),
 		},
@@ -30,5 +30,22 @@ func TestListWindowsMonitorNameAndFocus(t *testing.T) {
 	}
 	if ws[0].Geometry.X != 1 || ws[0].Geometry.Width != 3 {
 		t.Fatalf("geom %+v", ws[0].Geometry)
+	}
+	if ws[0].Pid != 4321 {
+		t.Fatalf("pid %d", ws[0].Pid)
+	}
+}
+
+func TestFocusedMonitor(t *testing.T) {
+	mons := []Monitor{
+		{Name: "HDMI-A-1", Width: 1, Focused: false},
+		{Name: "DP-1", Width: 2, Focused: true},
+	}
+	m, err := FocusedMonitor(mons)
+	if err != nil || m.Name != "DP-1" {
+		t.Fatalf("got %+v err=%v", m, err)
+	}
+	if _, err := FocusedMonitor(nil); err == nil {
+		t.Fatal("expected no focused monitor")
 	}
 }

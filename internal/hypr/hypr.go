@@ -26,6 +26,7 @@ type Window struct {
 	Mapped    bool     `json:"mapped"`
 	Floating  bool     `json:"floating"`
 	Focus     bool     `json:"focus"`
+	Pid       int      `json:"-"`
 }
 
 type Monitor struct {
@@ -53,6 +54,7 @@ type hyprClient struct {
 	Monitor        json.RawMessage `json:"monitor"`
 	Class          string          `json:"class"`
 	Title          string          `json:"title"`
+	Pid            int             `json:"pid"`
 	Floating       bool            `json:"floating"`
 	FocusHistoryID int             `json:"focusHistoryID"`
 }
@@ -113,6 +115,7 @@ func ListWindows(h host.Host) ([]Window, error) {
 			Mapped:    c.Mapped,
 			Floating:  c.Floating,
 			Focus:     focusAddr != "" && c.Address == focusAddr,
+			Pid:       c.Pid,
 		}
 		if !w.Focus && focusAddr == "" && c.FocusHistoryID == 0 {
 			w.Focus = true
@@ -120,6 +123,15 @@ func ListWindows(h host.Host) ([]Window, error) {
 		out = append(out, w)
 	}
 	return out, nil
+}
+
+func FocusedMonitor(mons []Monitor) (Monitor, error) {
+	for i := range mons {
+		if mons[i].Focused {
+			return mons[i], nil
+		}
+	}
+	return Monitor{}, fmt.Errorf("no focused monitor")
 }
 
 func monitorName(mons []Monitor, raw json.RawMessage) string {
