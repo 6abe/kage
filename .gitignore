@@ -1,5 +1,6 @@
 /kage
 /kage.exe
+/cmd/kage/kage
 /bin/
 /dist/
 *.test
