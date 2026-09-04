@@ -1,0 +1,13 @@
+/kage
+/kage.exe
+/bin/
+/dist/
+*.test
+*.out
+vendor/
+*.swp
+*~
+.idea/
+.vscode/
+.DS_Store
+.issue-body.md
