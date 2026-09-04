@@ -16,6 +16,10 @@ type Host interface {
 	// ClientsOnDisk reports skill/MCP presence. Always includes DefaultClient.
 	// Extra clients appear when their config directories exist.
 	ClientsOnDisk() []ClientStatus
+	// WriteFile writes data to path at mode 0600.
+	WriteFile(path string, data []byte) error
+	// ReadFile reads path from disk.
+	ReadFile(path string) ([]byte, error)
 }
 
 // ClientStatus is one agent client's skill + MCP files on disk.

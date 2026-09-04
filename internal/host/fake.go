@@ -19,6 +19,8 @@ type Fake struct {
 	GrimArgs   []string
 	Client     string
 	Disk       []ClientStatus
+	// ImageSize, if set, is the PNG grim writes. Otherwise -g WxH, else 8x4.
+	ImageSize image.Point
 }
 
 func (f *Fake) HyprctlJSON(resource string) ([]byte, error) {
@@ -60,14 +62,41 @@ func (f *Fake) Grim(args ...string) error {
 	if strings.HasPrefix(out, "-") {
 		return fmt.Errorf("grim: missing output")
 	}
-	return writeFakePNG(out)
+	w, h := 8, 4
+	if f.ImageSize.X > 0 && f.ImageSize.Y > 0 {
+		w, h = f.ImageSize.X, f.ImageSize.Y
+	} else {
+		for i, a := range args {
+			if a == "-g" && i+1 < len(args) {
+				if gw, gh, ok := parseGrimSize(args[i+1]); ok {
+					w, h = gw, gh
+				}
+			}
+		}
+	}
+	return writeFakePNG(out, w, h)
 }
 
-func writeFakePNG(path string) error {
+func parseGrimSize(g string) (w, h int, ok bool) {
+	var x, y int
+	n, err := fmt.Sscanf(g, "%d,%d %dx%d", &x, &y, &w, &h)
+	if err != nil || n != 4 || w < 1 || h < 1 {
+		return 0, 0, false
+	}
+	return w, h, true
+}
+
+func writeFakePNG(path string, w, h int) error {
+	if w < 1 {
+		w = 8
+	}
+	if h < 1 {
+		h = 4
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	img := image.NewRGBA(image.Rect(0, 0, 8, 4))
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	f, err := os.Create(path)
 	if err != nil {
 		return err
@@ -77,6 +106,19 @@ func writeFakePNG(path string) error {
 		err = cerr
 	}
 	return err
+}
+
+func (f *Fake) WriteFile(path string, data []byte) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+func (f *Fake) ReadFile(path string) ([]byte, error) {
+	return os.ReadFile(path)
 }
 
 func (f *Fake) DefaultClient() string {

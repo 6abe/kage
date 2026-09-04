@@ -124,3 +124,16 @@ func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
+
+func (Live) WriteFile(path string, data []byte) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+func (Live) ReadFile(path string) ([]byte, error) {
+	return os.ReadFile(path)
+}

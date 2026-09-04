@@ -12,7 +12,10 @@ import (
 	"github.com/6abe/kage/internal/hypr"
 )
 
-const CoordinateSpace = "global_compositor_pixels"
+const (
+	CoordinateSpace = "global_compositor_pixels"
+	DefaultMaxWidth = 1920
+)
 
 type Monitor struct {
 	Name   string  `json:"name"`
@@ -59,12 +62,29 @@ type Snapshot struct {
 	CoordinateSpace string   `json:"coordinate_space"`
 }
 
-func Capture(h host.Host, outPath string) (Snapshot, error) {
-	mons, err := hypr.ListMonitors(h)
-	if err != nil {
-		return Snapshot{}, err
+type Options struct {
+	Path     string
+	Monitor  string
+	Window   string
+	All      bool
+	Annotate bool
+	MaxWidth int
+}
+
+type target struct {
+	grim   []string
+	origin hypr.Geometry
+	mon    Monitor
+}
+
+func Capture(h host.Host, opt Options) (Snapshot, error) {
+	if n := opt.targets(); n > 1 {
+		return Snapshot{}, fmt.Errorf("--monitor, --window, and --all are mutually exclusive")
 	}
-	mon, err := hypr.FocusedMonitor(mons)
+	if opt.MaxWidth <= 0 {
+		opt.MaxWidth = DefaultMaxWidth
+	}
+	mons, err := hypr.ListMonitors(h)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -76,35 +96,137 @@ func Capture(h host.Host, outPath string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	path, err := resolvePath(h, outPath, id)
+	tgt, err := resolveTarget(mons, wins, opt)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	if err := h.Grim("-o", mon.Name, path); err != nil {
-		return Snapshot{}, err
-	}
-	width, height, err := capture.PNGSize(path)
+	path, err := resolvePath(h, opt.Path, id)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return Snapshot{
-		OK:         true,
-		SnapshotID: id,
-		Path:       path,
-		Width:      width,
-		Height:     height,
-		Monitor: Monitor{
-			Name:   mon.Name,
-			X:      mon.X,
-			Y:      mon.Y,
-			Width:  mon.Width,
-			Height: mon.Height,
-			Scale:  mon.Scale,
-		},
+	args := append(append([]string{}, tgt.grim...), path)
+	if err := h.Grim(args...); err != nil {
+		return Snapshot{}, err
+	}
+	width, height, err := downscaleFile(path, opt.MaxWidth)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	snap := Snapshot{
+		OK:              true,
+		SnapshotID:      id,
+		Path:            path,
+		Width:           width,
+		Height:          height,
+		Monitor:         tgt.mon,
 		Focused:         snapshotFocused(wins),
 		Windows:         snapshotWindows(wins),
 		CoordinateSpace: CoordinateSpace,
-	}, nil
+	}
+	if opt.Annotate {
+		if err := annotate(path, snap.Windows, tgt.origin.X, tgt.origin.Y, tgt.origin.Width, tgt.origin.Height); err != nil {
+			return Snapshot{}, err
+		}
+	}
+	if err := persist(h, snap); err != nil {
+		return Snapshot{}, err
+	}
+	return snap, nil
+}
+
+func (o Options) targets() int {
+	n := 0
+	if o.All {
+		n++
+	}
+	if o.Monitor != "" {
+		n++
+	}
+	if o.Window != "" {
+		n++
+	}
+	return n
+}
+
+func resolveTarget(mons []hypr.Monitor, wins []hypr.Window, opt Options) (target, error) {
+	switch {
+	case opt.All:
+		box, err := hypr.BoundingBox(mons)
+		if err != nil {
+			return target{}, err
+		}
+		return target{
+			grim:   []string{"-g", box.Grim()},
+			origin: box,
+			mon: Monitor{
+				Name:   "all",
+				X:      box.X,
+				Y:      box.Y,
+				Width:  box.Width,
+				Height: box.Height,
+				Scale:  1,
+			},
+		}, nil
+	case opt.Window != "":
+		w, err := hypr.MatchOne(wins, opt.Window)
+		if err != nil {
+			return target{}, err
+		}
+		g := w.Geometry
+		if g.Width <= 0 || g.Height <= 0 {
+			return target{}, fmt.Errorf("window %s has empty geometry", w.Address)
+		}
+		mon := monitorForWindow(mons, w)
+		return target{
+			grim:   []string{"-g", g.Grim()},
+			origin: g,
+			mon:    mon,
+		}, nil
+	case opt.Monitor != "":
+		m, err := hypr.MonitorByName(mons, opt.Monitor)
+		if err != nil {
+			return target{}, err
+		}
+		return monitorTarget(m), nil
+	default:
+		m, err := hypr.FocusedMonitor(mons)
+		if err != nil {
+			return target{}, err
+		}
+		return monitorTarget(m), nil
+	}
+}
+
+func monitorTarget(m hypr.Monitor) target {
+	return target{
+		grim:   []string{"-o", m.Name},
+		origin: m.Geometry(),
+		mon: Monitor{
+			Name:   m.Name,
+			X:      m.X,
+			Y:      m.Y,
+			Width:  m.Width,
+			Height: m.Height,
+			Scale:  m.Scale,
+		},
+	}
+}
+
+func monitorForWindow(mons []hypr.Monitor, w hypr.Window) Monitor {
+	for _, m := range mons {
+		if m.Name == w.Monitor {
+			return Monitor{
+				Name:   m.Name,
+				X:      m.X,
+				Y:      m.Y,
+				Width:  m.Width,
+				Height: m.Height,
+				Scale:  m.Scale,
+			}
+		}
+	}
+	g := w.Geometry
+	return Monitor{Name: w.Monitor, X: g.X, Y: g.Y, Width: g.Width, Height: g.Height, Scale: 1}
 }
 
 func resolvePath(h host.Host, outPath, id string) (string, error) {

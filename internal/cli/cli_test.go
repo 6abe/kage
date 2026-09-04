@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"image"
 	"image/png"
 	"io"
 	"os"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/6abe/kage/internal/cli"
 	"github.com/6abe/kage/internal/host"
+	"github.com/6abe/kage/internal/hypr"
+	"github.com/6abe/kage/internal/see"
 )
 
 const monitorsJSON = `[
@@ -592,7 +595,10 @@ func TestSeeFallbackDir(t *testing.T) {
 	if st.Mode().Perm() != 0o700 {
 		t.Fatalf("fallback dir mode %o", st.Mode().Perm())
 	}
-	t.Cleanup(func() { _ = os.Remove(p.Path) })
+	t.Cleanup(func() {
+		_ = os.Remove(p.Path)
+		_ = os.Remove(filepath.Join(wantDir, p.SnapshotID+".json"))
+	})
 }
 
 func TestSeeHuman(t *testing.T) {
@@ -658,10 +664,6 @@ func TestSeeErrors(t *testing.T) {
 		t.Fatalf("no focus: exit %d %s", code, errb)
 	}
 
-	_, errb, code = execCLI(seeHost(t), "see", "--annotate")
-	if code == 0 || !strings.Contains(errb, "unknown flag: --annotate") {
-		t.Fatalf("annotate: %s", errb)
-	}
 	_, errb, code = execCLI(seeHost(t), "see", "--path")
 	if code == 0 || !strings.Contains(errb, "flag --path requires a file path") {
 		t.Fatalf("--path missing: %s", errb)
@@ -675,3 +677,416 @@ func TestSeeErrors(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+func failPayload(t *testing.T, errb string) (f struct {
+	OK      bool   `json:"ok"`
+	Error   string `json:"error"`
+	Hint    string `json:"hint"`
+	Matches []struct {
+		Address string `json:"address"`
+		Class   string `json:"class"`
+		Title   string `json:"title"`
+	} `json:"matches"`
+}) {
+	t.Helper()
+	if err := json.Unmarshal([]byte(errb), &f); err != nil {
+		t.Fatalf("stderr json: %v (%s)", err, errb)
+	}
+	if f.OK {
+		t.Fatalf("ok true: %s", errb)
+	}
+	return f
+}
+
+func rgbAt(t *testing.T, img image.Image, x, y int) (r, g, b uint8) {
+	t.Helper()
+	rr, gg, bb, _ := img.At(x, y).RGBA()
+	return uint8(rr >> 8), uint8(gg >> 8), uint8(bb >> 8)
+}
+
+func decodePNG(t *testing.T, path string) image.Image {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return img
+}
+
+func TestSeeMonitorFlag(t *testing.T) {
+	h := seeHost(t)
+	h.JSON["monitors"] = []byte(`[
+		{"id":0,"name":"HDMI-A-1","x":5120,"y":0,"width":1920,"height":1080,"scale":1,"focused":false},
+		{"id":1,"name":"DP-1","x":0,"y":0,"width":5120,"height":1440,"scale":1.5,"focused":true}
+	]`)
+	out, errb, code := execCLI(h, "see", "--monitor", "HDMI-A-1")
+	if code != 0 {
+		t.Fatalf("exit %d stderr=%s", code, errb)
+	}
+	p := decodeSee(t, out)
+	if p.Monitor.Name != "HDMI-A-1" || p.Monitor.Width != 1920 {
+		t.Fatalf("monitor %+v", p.Monitor)
+	}
+	if len(h.GrimArgs) < 2 || h.GrimArgs[0] != "-o" || h.GrimArgs[1] != "HDMI-A-1" {
+		t.Fatalf("grim argv %q", h.GrimArgs)
+	}
+	assertPNGFile(t, p.Path)
+
+	out, errb, code = execCLI(seeHost(t), "see", "--monitor=dp-1")
+	if code != 0 {
+		t.Fatalf("fold exit %d %s", code, errb)
+	}
+	p = decodeSee(t, out)
+	if p.Monitor.Name != "DP-1" {
+		t.Fatalf("fold %s", p.Monitor.Name)
+	}
+
+	_, errb, code = execCLI(seeHost(t), "see", "--monitor", "NOPE")
+	if code == 0 || strings.TrimSpace(errb) == "" {
+		t.Fatal("missing monitor must fail")
+	}
+	f := failPayload(t, errb)
+	if !strings.Contains(f.Error, "no monitor named") || f.Hint != "kage monitors" {
+		t.Fatalf("missing monitor: %s", errb)
+	}
+}
+
+func TestSeeWindowFlag(t *testing.T) {
+	h := seeHost(t)
+	out, errb, code := execCLI(h, "see", "--window", "0x123")
+	if code != 0 {
+		t.Fatalf("exit %d stderr=%s", code, errb)
+	}
+	p := decodeSee(t, out)
+	if p.Windows[0].ID != 1 || p.Windows[0].Address != "0x123" {
+		t.Fatalf("windows %+v", p.Windows)
+	}
+	want := hypr.GrimGeom(100, 80, 1400, 900)
+	if len(h.GrimArgs) != 3 || h.GrimArgs[0] != "-g" || h.GrimArgs[1] != want {
+		t.Fatalf("grim argv %q want -g %q", h.GrimArgs, want)
+	}
+	if strings.Contains(strings.Join(h.GrimArgs, " "), "100,80,1400,900") {
+		t.Fatalf("comma geometry is invalid: %q", h.GrimArgs)
+	}
+	w, ht := assertPNGFile(t, p.Path)
+	if w != 1400 || ht != 900 {
+		t.Fatalf("png %dx%d (window geom, under max-width)", w, ht)
+	}
+
+	h = seeHost(t)
+	out, errb, code = execCLI(h, "see", "--window", "KITTY")
+	if code != 0 {
+		t.Fatalf("class: exit %d %s", code, errb)
+	}
+	p = decodeSee(t, out)
+	if len(h.GrimArgs) < 2 || h.GrimArgs[1] != hypr.GrimGeom(0, 0, 800, 600) {
+		t.Fatalf("class grim %q", h.GrimArgs)
+	}
+	if p.Windows[1].Class != "kitty" {
+		t.Fatalf("still lists all windows: %+v", p.Windows)
+	}
+
+	h = seeHost(t)
+	_, errb, code = execCLI(h, "see", "--window=Git")
+	if code != 0 {
+		t.Fatalf("title: exit %d %s", code, errb)
+	}
+	if h.GrimArgs[1] != hypr.GrimGeom(100, 80, 1400, 900) {
+		t.Fatalf("title grim %q", h.GrimArgs)
+	}
+}
+
+func TestSeeWindowNoMatchAndAmbiguous(t *testing.T) {
+	h := seeHost(t)
+	out, errb, code := execCLI(h, "see", "--window", "no-such-client")
+	if code == 0 || out != "" {
+		t.Fatalf("no match must fail, stdout=%s", out)
+	}
+	if h.GrimArgs != nil {
+		t.Fatalf("no match must not capture: %q", h.GrimArgs)
+	}
+	f := failPayload(t, errb)
+	if !strings.Contains(f.Error, "no window matches") || f.Hint != "kage windows" {
+		t.Fatalf("no match: %s", errb)
+	}
+
+	h = seeHost(t)
+	h.JSON["clients"] = []byte(`[
+		{"address":"0x1","mapped":true,"at":[0,0],"size":[10,10],"workspace":{"id":1},"monitor":1,"class":"kitty","title":"a","pid":1,"focusHistoryID":0},
+		{"address":"0x2","mapped":true,"at":[10,0],"size":[10,10],"workspace":{"id":1},"monitor":1,"class":"kitty","title":"b","pid":2,"focusHistoryID":1}
+	]`)
+	out, errb, code = execCLI(h, "see", "--window", "kitty")
+	if code != 2 {
+		t.Fatalf("ambiguous exit %d want 2 stdout=%s stderr=%s", code, out, errb)
+	}
+	if out != "" {
+		t.Fatalf("stdout should be empty: %s", out)
+	}
+	if h.GrimArgs != nil {
+		t.Fatalf("ambiguous must not capture: %q", h.GrimArgs)
+	}
+	f = failPayload(t, errb)
+	if !strings.Contains(f.Error, "ambiguous") {
+		t.Fatalf("error: %s", errb)
+	}
+	if len(f.Matches) != 2 {
+		t.Fatalf("matches %+v", f.Matches)
+	}
+	got := f.Matches[0].Address + "," + f.Matches[1].Address
+	if got != "0x1,0x2" {
+		t.Fatalf("match addresses %s", got)
+	}
+}
+
+func TestSeeAllUnion(t *testing.T) {
+	h := seeHost(t)
+	h.JSON["monitors"] = []byte(`[
+		{"id":0,"name":"DP-1","x":0,"y":0,"width":100,"height":50,"scale":1,"focused":true},
+		{"id":1,"name":"HDMI-A-1","x":100,"y":-10,"width":80,"height":60,"scale":1,"focused":false}
+	]`)
+	out, errb, code := execCLI(h, "see", "--all")
+	if code != 0 {
+		t.Fatalf("exit %d stderr=%s", code, errb)
+	}
+	p := decodeSee(t, out)
+	if p.Monitor.Name != "all" || p.Monitor.X != 0 || p.Monitor.Y != -10 || p.Monitor.Width != 180 || p.Monitor.Height != 60 {
+		t.Fatalf("union monitor %+v", p.Monitor)
+	}
+	want := hypr.GrimGeom(0, -10, 180, 60)
+	if len(h.GrimArgs) != 3 || h.GrimArgs[0] != "-g" || h.GrimArgs[1] != want {
+		t.Fatalf("grim argv %q want -g %q", h.GrimArgs, want)
+	}
+	w, ht := assertPNGFile(t, p.Path)
+	if w != 180 || ht != 60 {
+		t.Fatalf("png %dx%d", w, ht)
+	}
+	if p.Path == "" || strings.Contains(out, "base64") {
+		t.Fatalf("one path, no bytes: %s", out)
+	}
+}
+
+func TestSeeMutuallyExclusiveTargets(t *testing.T) {
+	for _, args := range [][]string{
+		{"see", "--all", "--monitor", "DP-1"},
+		{"see", "--all", "--window", "0x123"},
+		{"see", "--monitor", "DP-1", "--window", "0x123"},
+	} {
+		_, errb, code := execCLI(seeHost(t), args...)
+		if code == 0 || !strings.Contains(errb, "mutually exclusive") {
+			t.Fatalf("%v: %s", args, errb)
+		}
+	}
+}
+
+func TestSeeMaxWidth(t *testing.T) {
+	h := seeHost(t)
+	h.ImageSize = image.Pt(2000, 1000)
+	out, errb, code := execCLI(h, "see")
+	if code != 0 {
+		t.Fatalf("exit %d %s", code, errb)
+	}
+	p := decodeSee(t, out)
+	if p.Width != 1920 || p.Height != 960 {
+		t.Fatalf("default long-edge 1920, got %dx%d", p.Width, p.Height)
+	}
+	w, ht := assertPNGFile(t, p.Path)
+	if w != 1920 || ht != 960 {
+		t.Fatalf("file %dx%d", w, ht)
+	}
+
+	h = seeHost(t)
+	h.ImageSize = image.Pt(400, 200)
+	out, errb, code = execCLI(h, "see", "--max-width", "200")
+	if code != 0 {
+		t.Fatalf("exit %d %s", code, errb)
+	}
+	p = decodeSee(t, out)
+	if p.Width != 200 || p.Height != 100 {
+		t.Fatalf("max-width 200: %dx%d", p.Width, p.Height)
+	}
+	w, ht = assertPNGFile(t, p.Path)
+	if w != 200 || ht != 100 {
+		t.Fatalf("file %dx%d", w, ht)
+	}
+
+	h = seeHost(t)
+	h.ImageSize = image.Pt(100, 400)
+	out, _, code = execCLI(h, "see", "--max-width=100")
+	if code != 0 {
+		t.Fatal(code)
+	}
+	p = decodeSee(t, out)
+	if p.Width != 25 || p.Height != 100 {
+		t.Fatalf("portrait long edge: %dx%d", p.Width, p.Height)
+	}
+
+	_, errb, code = execCLI(seeHost(t), "see", "--max-width", "0")
+	if code == 0 || !strings.Contains(errb, "positive integer") {
+		t.Fatalf("max-width 0: %s", errb)
+	}
+	_, errb, code = execCLI(seeHost(t), "see", "--max-width", "nope")
+	if code == 0 || !strings.Contains(errb, "positive integer") {
+		t.Fatalf("max-width nope: %s", errb)
+	}
+}
+
+func TestSeeAnnotateDrawsIDs(t *testing.T) {
+	h := seeHost(t)
+	h.ImageSize = image.Pt(400, 240)
+	h.JSON["monitors"] = []byte(`[{"id":1,"name":"DP-1","x":0,"y":0,"width":400,"height":240,"scale":1,"focused":true}]`)
+	h.JSON["clients"] = []byte(`[
+		{"address":"0x1","mapped":true,"at":[40,40],"size":[100,80],"workspace":{"id":1},"monitor":1,"class":"a","title":"one","pid":1,"focusHistoryID":0},
+		{"address":"0x2","mapped":false,"at":[240,40],"size":[100,80],"workspace":{"id":1},"monitor":1,"class":"b","title":"two","pid":2,"focusHistoryID":1},
+		{"address":"0x3","mapped":true,"at":[40,140],"size":[80,60],"workspace":{"id":1},"monitor":1,"class":"c","title":"three","pid":3,"focusHistoryID":2}
+	]`)
+	h.JSON["activewindow"] = []byte(`{"address":"0x1"}`)
+	out, errb, code := execCLI(h, "see", "--annotate", "--max-width", "200")
+	if code != 0 {
+		t.Fatalf("exit %d stderr=%s", code, errb)
+	}
+	p := decodeSee(t, out)
+	if p.Width != 200 || p.Height != 120 {
+		t.Fatalf("downscaled %dx%d", p.Width, p.Height)
+	}
+	if len(p.Windows) != 3 || p.Windows[0].ID != 1 || p.Windows[1].ID != 2 || p.Windows[2].ID != 3 {
+		t.Fatalf("ids %+v", p.Windows)
+	}
+	if p.Windows[0].Mapped == false || p.Windows[1].Mapped != false {
+		t.Fatalf("mapped flags %+v", p.Windows)
+	}
+	if p.Windows[0].At != [2]int{40, 40} || p.Windows[2].ID != 3 {
+		t.Fatalf("compositor coords stay unscaled: %+v", p.Windows)
+	}
+	img := decodePNG(t, p.Path)
+	r, g, b := rgbAt(t, img, 20, 20)
+	if r < 200 || g > 40 || b > 40 {
+		t.Fatalf("window 1 box not red at scaled 20,20: %d,%d,%d", r, g, b)
+	}
+	r, g, b = rgbAt(t, img, 20, 70)
+	if r < 200 || g > 40 || b > 40 {
+		t.Fatalf("window 3 box not red at scaled 20,70: %d,%d,%d", r, g, b)
+	}
+	r, g, b = rgbAt(t, img, 120, 20)
+	if r != 0 || g != 0 || b != 0 {
+		t.Fatalf("unmapped window 2 must not be boxed: %d,%d,%d", r, g, b)
+	}
+	if !regionHasWhite(img, 22, 22, 24, 20) {
+		t.Fatal("window 1 id glyph missing (want white pixels in label)")
+	}
+	if !regionHasWhite(img, 22, 72, 24, 20) {
+		t.Fatal("window 3 id glyph missing")
+	}
+}
+
+func regionHasWhite(img image.Image, x, y, w, h int) bool {
+	b := img.Bounds()
+	for yy := y; yy < y+h; yy++ {
+		for xx := x; xx < x+w; xx++ {
+			if !image.Pt(xx, yy).In(b) {
+				continue
+			}
+			rr, gg, bb, _ := img.At(xx, yy).RGBA()
+			if rr>>8 > 200 && gg>>8 > 200 && bb>>8 > 200 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestSeeSnapshotPersistAndLoad(t *testing.T) {
+	h := seeHost(t)
+	out, errb, code := execCLI(h, "see")
+	if code != 0 {
+		t.Fatalf("exit %d %s", code, errb)
+	}
+	p := decodeSee(t, out)
+	meta := filepath.Join(filepath.Dir(p.Path), p.SnapshotID+".json")
+	if _, err := os.Stat(meta); err != nil {
+		t.Fatalf("sidecar: %v", err)
+	}
+	loaded, err := see.Load(h, p.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.SnapshotID != p.SnapshotID || len(loaded.Windows) != 2 || loaded.Windows[0].ID != 1 {
+		t.Fatalf("loaded %+v", loaded)
+	}
+	if loaded.Windows[0].Address != "0x123" || loaded.Windows[1].ID != 2 {
+		t.Fatalf("ids must round-trip: %+v", loaded.Windows)
+	}
+
+	path := filepath.Join(t.TempDir(), "custom.png")
+	h = seeHost(t)
+	out, errb, code = execCLI(h, "see", "--path", path)
+	if code != 0 {
+		t.Fatalf("path exit %d %s", code, errb)
+	}
+	p = decodeSee(t, out)
+	side := filepath.Join(filepath.Dir(p.Path), p.SnapshotID+".json")
+	if _, err := os.Stat(side); err != nil {
+		t.Fatalf("sidecar next to png: %v", err)
+	}
+	if _, err := see.Load(h, p.SnapshotID); err != nil {
+		t.Fatalf("lookup store: %v", err)
+	}
+	_, err = see.Load(h, "../etc/passwd")
+	if err == nil {
+		t.Fatal("path traversal must fail")
+	}
+	if _, err = see.Load(h, "kage_20000101_000000_abcd"); err == nil {
+		t.Fatal("missing snapshot must fail")
+	}
+}
+
+func TestSeeMissingFlagValues(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"see", "--window"}, "flag --window requires ADDRESS|CLASS|TITLE"},
+		{[]string{"see", "--monitor"}, "flag --monitor requires a name"},
+		{[]string{"see", "--max-width"}, "flag --max-width requires a positive integer"},
+	} {
+		out, errb, code := execCLI(seeHost(t), tc.args...)
+		if code == 0 || out != "" {
+			t.Fatalf("%v: exit %d stdout=%s", tc.args, code, out)
+		}
+		if !strings.Contains(errb, tc.want) {
+			t.Fatalf("%v: %s", tc.args, errb)
+		}
+	}
+}
+
+func TestSeeWindowEmptyGeometry(t *testing.T) {
+	h := seeHost(t)
+	h.JSON["clients"] = []byte(`[
+		{"address":"0x123","mapped":true,"at":[10,10],"size":[0,0],"workspace":{"id":1},"monitor":1,"class":"x","title":"z","pid":1,"focusHistoryID":0}
+	]`)
+	out, errb, code := execCLI(h, "see", "--window", "0x123")
+	if code == 0 || out != "" {
+		t.Fatalf("exit %d stdout=%s", code, out)
+	}
+	if h.GrimArgs != nil {
+		t.Fatalf("must not grim empty geom: %q", h.GrimArgs)
+	}
+	if !strings.Contains(errb, "empty geometry") {
+		t.Fatalf("stderr: %s", errb)
+	}
+}
+
+func TestSeeFlagsRejectedOnOtherCommands(t *testing.T) {
+	_, errb, code := execCLI(okHost(), "windows", "--annotate")
+	if code == 0 || !strings.Contains(errb, "unknown flag: --annotate") {
+		t.Fatalf("windows --annotate: %s", errb)
+	}
+	_, errb, code = execCLI(okHost(), "monitors", "--all")
+	if code == 0 || !strings.Contains(errb, "unknown flag: --all") {
+		t.Fatalf("monitors --all: %s", errb)
+	}
+}
