@@ -15,8 +15,6 @@ import (
 
 const seeFirst = "Call kage_see first, read the PNG at path, then click using coordinates or window id from that snapshot. Do not guess coordinates."
 
-const pngMagic = "\x89PNG\r\n\x1a\n"
-
 type CLI func(h host.Host, args []string, stdout, stderr io.Writer) int
 
 type server struct {
@@ -151,11 +149,11 @@ type hotkeyArgs struct {
 }
 
 func (s *server) doctor(context.Context, *sdkmcp.CallToolRequest, emptyArgs) (*sdkmcp.CallToolResult, any, error) {
-	return s.wrap([]string{"doctor"}, false)
+	return s.wrap([]string{"doctor"})
 }
 
 func (s *server) windows(context.Context, *sdkmcp.CallToolRequest, emptyArgs) (*sdkmcp.CallToolResult, any, error) {
-	return s.wrap([]string{"windows"}, false)
+	return s.wrap([]string{"windows"})
 }
 
 func (s *server) see(_ context.Context, _ *sdkmcp.CallToolRequest, in seeArgs) (*sdkmcp.CallToolResult, any, error) {
@@ -178,7 +176,7 @@ func (s *server) see(_ context.Context, _ *sdkmcp.CallToolRequest, in seeArgs) (
 	if in.All {
 		args = append(args, "--all")
 	}
-	return s.wrap(args, true)
+	return s.wrap(args)
 }
 
 func (s *server) focus(_ context.Context, _ *sdkmcp.CallToolRequest, in focusArgs) (*sdkmcp.CallToolResult, any, error) {
@@ -186,7 +184,7 @@ func (s *server) focus(_ context.Context, _ *sdkmcp.CallToolRequest, in focusArg
 	if in.Window != "" {
 		args = append(args, "--window", in.Window)
 	}
-	return s.wrap(args, false)
+	return s.wrap(args)
 }
 
 func (s *server) click(_ context.Context, _ *sdkmcp.CallToolRequest, in clickArgs) (*sdkmcp.CallToolResult, any, error) {
@@ -209,7 +207,7 @@ func (s *server) click(_ context.Context, _ *sdkmcp.CallToolRequest, in clickArg
 	if in.Window != "" {
 		args = append(args, "--window", in.Window)
 	}
-	return s.wrap(args, false)
+	return s.wrap(args)
 }
 
 func (s *server) typeText(_ context.Context, _ *sdkmcp.CallToolRequest, in typeArgs) (*sdkmcp.CallToolResult, any, error) {
@@ -224,7 +222,7 @@ func (s *server) typeText(_ context.Context, _ *sdkmcp.CallToolRequest, in typeA
 		args = append(args, "--window", in.Window)
 	}
 	args = append(args, in.Text)
-	return s.wrap(args, false)
+	return s.wrap(args)
 }
 
 func (s *server) press(_ context.Context, _ *sdkmcp.CallToolRequest, in pressArgs) (*sdkmcp.CallToolResult, any, error) {
@@ -236,7 +234,7 @@ func (s *server) press(_ context.Context, _ *sdkmcp.CallToolRequest, in pressArg
 		args = append(args, "--window", in.Window)
 	}
 	args = append(args, in.Key)
-	return s.wrap(args, false)
+	return s.wrap(args)
 }
 
 func (s *server) hotkey(_ context.Context, _ *sdkmcp.CallToolRequest, in hotkeyArgs) (*sdkmcp.CallToolResult, any, error) {
@@ -245,10 +243,10 @@ func (s *server) hotkey(_ context.Context, _ *sdkmcp.CallToolRequest, in hotkeyA
 		args = append(args, "--yes")
 	}
 	args = append(args, in.Hotkey)
-	return s.wrap(args, false)
+	return s.wrap(args)
 }
 
-func (s *server) wrap(args []string, attachPNG bool) (*sdkmcp.CallToolResult, any, error) {
+func (s *server) wrap(args []string) (*sdkmcp.CallToolResult, any, error) {
 	var stdout, stderr bytes.Buffer
 	code := s.run(s.h, args, &stdout, &stderr)
 	raw := bytes.TrimSpace(stdout.Bytes())
@@ -262,11 +260,6 @@ func (s *server) wrap(args []string, attachPNG bool) (*sdkmcp.CallToolResult, an
 	}
 	isErr := code != 0 && !jsonOK(parsed)
 	content := []sdkmcp.Content{&sdkmcp.TextContent{Text: text}}
-	if attachPNG && !isErr {
-		if img := pngBlock(s.h, parsed); img != nil {
-			content = append(content, img)
-		}
-	}
 	return &sdkmcp.CallToolResult{Content: content, IsError: isErr}, parsed, nil
 }
 
@@ -277,20 +270,4 @@ func jsonOK(v any) bool {
 	}
 	b, _ := m["ok"].(bool)
 	return b
-}
-
-func pngBlock(h host.Host, v any) sdkmcp.Content {
-	m, ok := v.(map[string]any)
-	if !ok {
-		return nil
-	}
-	path, _ := m["path"].(string)
-	if path == "" {
-		return nil
-	}
-	b, err := h.ReadFile(path)
-	if err != nil || !bytes.HasPrefix(b, []byte(pngMagic)) {
-		return nil
-	}
-	return &sdkmcp.ImageContent{Data: b, MIMEType: "image/png"}
 }

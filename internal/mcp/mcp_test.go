@@ -268,19 +268,13 @@ func TestSeeAndClickMatchCLI(t *testing.T) {
 	if !snap.OK || snap.Path == "" {
 		t.Fatalf("see json: %s", text)
 	}
-	if snap.Data != "" || snap.Image != "" || strings.Contains(text, `"data"`) {
+	if snap.Data != "" || snap.Image != "" || strings.Contains(text, `"data"`) || strings.Contains(text, "base64") || strings.Contains(text, "iVBORw0KGgo") {
 		t.Fatalf("screenshot bytes in JSON: %s", text)
 	}
 	if _, err := h.ReadFile(snap.Path); err != nil {
 		t.Fatal(err)
 	}
-	img := imageBlock(seeRes)
-	if img == nil {
-		t.Fatal("missing image content block")
-	}
-	if img.MIMEType != "image/png" || !bytes.HasPrefix(img.Data, []byte("\x89PNG\r\n\x1a\n")) {
-		t.Fatalf("image block: mime=%s n=%d", img.MIMEType, len(img.Data))
-	}
+	assertTextOnly(t, seeRes)
 
 	h.Allow = true
 	clickRes, err := cs.CallTool(ctx, &sdkmcp.CallToolParams{
@@ -305,6 +299,7 @@ func TestSeeAndClickMatchCLI(t *testing.T) {
 	if !click.OK || click.On != 1 || click.At != [2]int{800, 530} {
 		t.Fatalf("click json: %s", clickText)
 	}
+	assertTextOnly(t, clickRes)
 	if len(h.YdotoolCalls) < 2 {
 		t.Fatalf("ydotool %q", h.YdotoolCalls)
 	}
@@ -335,6 +330,7 @@ func TestToolsMatchCLIJSON(t *testing.T) {
 			if res.IsError {
 				t.Fatalf("mcp error: %s", textJSON(t, res))
 			}
+			assertTextOnly(t, res)
 			cliOut, errb, code := execCLI(okHost(), tc.cli...)
 			if code != 0 {
 				t.Fatalf("cli %d %s", code, errb)
@@ -366,6 +362,7 @@ func TestClickDeniedMatchesCLI(t *testing.T) {
 	if !jsonEqual(t, textJSON(t, res), errb) {
 		t.Fatalf("mcp %s\ncli %s", textJSON(t, res), errb)
 	}
+	assertTextOnly(t, res)
 	if len(h.YdotoolCalls) != 0 {
 		t.Fatalf("must not click: %q", h.YdotoolCalls)
 	}
@@ -382,9 +379,7 @@ func TestSeeErrorHasNoImage(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("want see error")
 	}
-	if imageBlock(res) != nil {
-		t.Fatal("failed see must not attach image content")
-	}
+	assertTextOnly(t, res)
 	text := textJSON(t, res)
 	var payload struct {
 		OK    bool   `json:"ok"`
@@ -439,6 +434,19 @@ func textJSON(t *testing.T, res *sdkmcp.CallToolResult) string {
 	}
 	t.Fatal("no text content")
 	return ""
+}
+
+func assertTextOnly(t *testing.T, res *sdkmcp.CallToolResult) {
+	t.Helper()
+	if imageBlock(res) != nil {
+		t.Fatal("must not attach image content")
+	}
+	if len(res.Content) != 1 {
+		t.Fatalf("content blocks: %d", len(res.Content))
+	}
+	if _, ok := res.Content[0].(*sdkmcp.TextContent); !ok {
+		t.Fatalf("content must be text only: %T", res.Content[0])
+	}
 }
 
 func imageBlock(res *sdkmcp.CallToolResult) *sdkmcp.ImageContent {

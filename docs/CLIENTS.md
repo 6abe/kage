@@ -26,7 +26,7 @@ default_client = "grok"   # grok | claude | cursor | codex
 
 Each tool description must tell the model: call `kage_see` first, read the PNG at `path`, then click using coordinates or window id from that snapshot. Do not guess coordinates.
 
-If the SDK can attach an image content block, do it. If the client ignores that, JSON `path` is enough. The skill tells the agent to read the file.
+Tools return CLI JSON text only. Do not attach an image content block. JSON `path` is enough. The skill tells the agent to read the file.
 
 Do not return screenshot bytes in the MCP payload. Some clients truncate hard (Grok at ~20k bytes via `GROK_MAX_MCP_OUTPUT_BYTES`). Files survive that. Base64 does not.
 
