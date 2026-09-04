@@ -95,6 +95,14 @@ func TestMatchWindowAddressClassTitle(t *testing.T) {
 	}
 }
 
+func TestFocusDispatchLua(t *testing.T) {
+	got := FocusDispatch("0x559ae3fc8aa0")
+	want := "hl.dsp.focus({ window = 'address:0x559ae3fc8aa0' })"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
 func TestMatchWindowClassBeforeTitle(t *testing.T) {
 	wins := []Window{
 		{Address: "0x1", Class: "kitty", Title: "foo"},

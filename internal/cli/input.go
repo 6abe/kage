@@ -45,7 +45,7 @@ func runFocus(h host.Host, inv invocation, stdout, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	if err := h.HyprctlDispatch("focuswindow", "address:"+win.Address); err != nil {
+	if err := h.HyprctlDispatch(hypr.FocusDispatch(win.Address)); err != nil {
 		return writeFail(stderr, err.Error(), hyprHint(h))
 	}
 	h.Log("focus address=" + win.Address)
@@ -72,7 +72,7 @@ func runType(h host.Host, inv invocation, stdout, stderr io.Writer) int {
 		return code
 	}
 	if inv.window != "" {
-		if err := h.HyprctlDispatch("focuswindow", "address:"+win.Address); err != nil {
+		if err := h.HyprctlDispatch(hypr.FocusDispatch(win.Address)); err != nil {
 			return writeFail(stderr, err.Error(), hyprHint(h))
 		}
 	}
@@ -113,7 +113,7 @@ func runPress(h host.Host, inv invocation, stdout, stderr io.Writer) int {
 		return code
 	}
 	if inv.window != "" {
-		if err := h.HyprctlDispatch("focuswindow", "address:"+win.Address); err != nil {
+		if err := h.HyprctlDispatch(hypr.FocusDispatch(win.Address)); err != nil {
 			return writeFail(stderr, err.Error(), hyprHint(h))
 		}
 	}

@@ -15,7 +15,7 @@ func TestFocusWindowByAddressClassTitle(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d stderr=%s", code, errb)
 	}
-	if len(h.Dispatch) != 1 || !reflect.DeepEqual(h.Dispatch[0], []string{"focuswindow", "address:0x456"}) {
+	if len(h.Dispatch) != 1 || !reflect.DeepEqual(h.Dispatch[0], wantFocus("0x456")) {
 		t.Fatalf("dispatch %q", h.Dispatch)
 	}
 	if len(h.WtypeCalls) != 0 {
@@ -40,7 +40,7 @@ func TestFocusWindowByAddressClassTitle(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("class exit %d %s", code, errb)
 	}
-	if !reflect.DeepEqual(h.Dispatch[0], []string{"focuswindow", "address:0x123"}) {
+	if !reflect.DeepEqual(h.Dispatch[0], wantFocus("0x123")) {
 		t.Fatalf("class dispatch %q", h.Dispatch)
 	}
 
@@ -49,7 +49,7 @@ func TestFocusWindowByAddressClassTitle(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("title exit %d %s", code, errb)
 	}
-	if !reflect.DeepEqual(h.Dispatch[0], []string{"focuswindow", "address:0x456"}) {
+	if !reflect.DeepEqual(h.Dispatch[0], wantFocus("0x456")) {
 		t.Fatalf("title dispatch %q", h.Dispatch)
 	}
 }
@@ -133,7 +133,7 @@ func TestTypeClearAndFocusTarget(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d %s", code, errb)
 	}
-	if !reflect.DeepEqual(h.Dispatch[0], []string{"focuswindow", "address:0x456"}) {
+	if !reflect.DeepEqual(h.Dispatch[0], wantFocus("0x456")) {
 		t.Fatalf("dispatch %q", h.Dispatch)
 	}
 	want := []string{"-M", "ctrl", "-k", "a", "-m", "ctrl", "--", "hello"}
@@ -192,7 +192,7 @@ func TestPressKeys(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("%s: %d %s", key, code, errb)
 		}
-		if !reflect.DeepEqual(h.Dispatch[0], []string{"focuswindow", "address:0x123"}) {
+		if !reflect.DeepEqual(h.Dispatch[0], wantFocus("0x123")) {
 			t.Fatalf("%s dispatch %q", key, h.Dispatch)
 		}
 		if !reflect.DeepEqual(lastWtype(t, h), []string{"-k", key}) {
@@ -335,4 +335,9 @@ func lastWtype(t *testing.T, h *host.Fake) []string {
 		t.Fatalf("wtype calls %d: %q", len(h.WtypeCalls), h.WtypeCalls)
 	}
 	return h.WtypeCalls[0]
+}
+
+// argv Host.HyprctlDispatch receives, i.e. hyprctl dispatch <this>
+func wantFocus(addr string) []string {
+	return []string{"hl.dsp.focus({ window = 'address:" + addr + "' })"}
 }

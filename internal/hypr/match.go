@@ -34,6 +34,12 @@ func MatchWindow(wins []Window, query string) (Window, []Window, error) {
 	}))
 }
 
+// FocusDispatch is one `hyprctl dispatch` argument. Hyprland 0.56 is Lua;
+// `focuswindow address:0x…` is a parse error.
+func FocusDispatch(address string) string {
+	return "hl.dsp.focus({ window = 'address:" + address + "' })"
+}
+
 // FocusedWindow returns the focused client, or ErrNoFocus.
 func FocusedWindow(wins []Window) (Window, error) {
 	for _, w := range wins {
