@@ -11,14 +11,21 @@ import (
 
 // Fake is an in-memory Host for tests. It never talks to a compositor.
 type Fake struct {
-	JSON       map[string][]byte
-	HyprctlErr error
-	Environ    map[string]string
-	Paths      map[string]string
-	Probe      error
-	GrimArgs   []string
-	Client     string
-	Disk       []ClientStatus
+	JSON        map[string][]byte
+	HyprctlErr  error
+	Environ     map[string]string
+	Paths       map[string]string
+	Lookups     []string
+	Probe       error
+	GrimArgs    []string
+	Client      string
+	Disk        []ClientStatus
+	Allow       bool
+	Logs        []string
+	Dispatch    [][]string
+	DispatchErr error
+	WtypeCalls  [][]string
+	WtypeErr    error
 }
 
 func (f *Fake) HyprctlJSON(resource string) ([]byte, error) {
@@ -39,13 +46,32 @@ func (f *Fake) Env(key string) string {
 	return f.Environ[key]
 }
 
+func (f *Fake) HyprctlDispatch(args ...string) error {
+	f.Dispatch = append(f.Dispatch, append([]string(nil), args...))
+	return f.DispatchErr
+}
+
 func (f *Fake) LookPath(name string) (string, error) {
+	f.Lookups = append(f.Lookups, name)
 	if f.Paths != nil {
 		if p, ok := f.Paths[name]; ok && p != "" {
 			return p, nil
 		}
 	}
 	return "", fmt.Errorf("executable file not found in $PATH")
+}
+
+func (f *Fake) Wtype(args ...string) error {
+	f.WtypeCalls = append(f.WtypeCalls, append([]string(nil), args...))
+	return f.WtypeErr
+}
+
+func (f *Fake) AllowInput() bool {
+	return f.Allow
+}
+
+func (f *Fake) Log(line string) {
+	f.Logs = append(f.Logs, line)
 }
 
 func (f *Fake) Grim(args ...string) error {

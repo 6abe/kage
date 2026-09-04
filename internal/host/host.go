@@ -5,12 +5,20 @@ package host
 type Host interface {
 	// HyprctlJSON runs `hyprctl -j <resource>` (monitors, clients, activewindow).
 	HyprctlJSON(resource string) ([]byte, error)
+	// HyprctlDispatch runs `hyprctl dispatch <args...>`.
+	HyprctlDispatch(args ...string) error
 	// Env returns an environment variable (empty if unset).
 	Env(key string) string
 	// LookPath resolves an executable on PATH. Missing tools return an error.
 	LookPath(name string) (string, error)
 	// Grim runs grim with args (no binary name). Doctor uses GrimProbeArgs.
 	Grim(args ...string) error
+	// Wtype runs wtype with args (no binary name). Errors must not include args.
+	Wtype(args ...string) error
+	// AllowInput is true when config has allow_input = true.
+	AllowInput() bool
+	// Log appends one line to the kage log. Callers must never pass keystrokes.
+	Log(line string)
 	// DefaultClient is "grok" unless config says otherwise.
 	DefaultClient() string
 	// ClientsOnDisk reports skill/MCP presence. Always includes DefaultClient.
