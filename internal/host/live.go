@@ -133,47 +133,20 @@ func readUserConfig() []byte {
 }
 
 func (l Live) ClientsOnDisk() []ClientStatus {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = ""
-	}
-	def := l.DefaultClient()
-	known := []struct {
-		name      string
-		dir       string
-		skill     string
-		mcpFiles  []string
-		mcpNeedle string
-	}{
-		{"grok", ".grok", ".grok/skills/kage", []string{".grok/config.toml"}, "kage"},
-		{"claude", ".claude", ".claude/skills/kage", []string{".claude.json", ".claude/settings.json"}, "kage"},
-		{"cursor", ".cursor", ".cursor/skills/kage", []string{".cursor/mcp.json"}, "kage"},
-		{"codex", ".codex", ".codex/skills/kage", []string{".codex/config.toml", ".codex/mcp.json"}, "kage"},
-	}
-	var out []ClientStatus
-	seen := map[string]bool{}
-	for _, k := range known {
-		st := ClientStatus{Name: k.name}
-		if home != "" {
-			st.ConfigDir = exists(filepath.Join(home, k.dir))
-			st.Skill = exists(filepath.Join(home, k.skill))
-			for _, rel := range k.mcpFiles {
-				p := filepath.Join(home, rel)
-				if b, err := os.ReadFile(p); err == nil && bytes.Contains(bytes.ToLower(b), []byte(k.mcpNeedle)) {
-					st.MCP = true
-					break
-				}
-			}
-		}
-		if k.name == def || st.ConfigDir || st.Skill || st.MCP {
-			out = append(out, st)
-			seen[k.name] = true
-		}
-	}
-	if !seen[def] {
-		out = append([]ClientStatus{{Name: def}}, out...)
-	}
-	return out
+	return ScanClients(l)
+}
+
+func (Live) HomeDir() (string, error) {
+	return os.UserHomeDir()
+}
+
+func (Live) Exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func (Live) RemoveAll(path string) error {
+	return os.RemoveAll(path)
 }
 
 // FileConfig is the parsed ~/.config/kage/config.toml.
@@ -210,11 +183,6 @@ func ParseConfig(data []byte) FileConfig {
 // ParseDefaultClient reads default_client from config.toml bytes.
 func ParseDefaultClient(data []byte) string {
 	return ParseConfig(data).DefaultClient
-}
-
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 func (Live) WriteFile(path string, data []byte) error {

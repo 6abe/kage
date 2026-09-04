@@ -26,11 +26,22 @@ type Host interface {
 	// ClientsOnDisk reports skill/MCP presence. Always includes DefaultClient.
 	// Extra clients appear when their config directories exist.
 	ClientsOnDisk() []ClientStatus
+	// HomeDir is the user home used for client skill and MCP files.
+	HomeDir() (string, error)
+	// Exists reports whether path is present.
+	Exists(path string) bool
 	// WriteFile writes data to path at mode 0600.
 	WriteFile(path string, data []byte) error
 	// ReadFile reads path from disk.
 	ReadFile(path string) ([]byte, error)
+	// RemoveAll removes path and its children.
+	RemoveAll(path string) error
 }
+
+var (
+	_ Host = Live{}
+	_ Host = (*Fake)(nil)
+)
 
 // ClientStatus is one agent client's skill + MCP files on disk.
 type ClientStatus struct {

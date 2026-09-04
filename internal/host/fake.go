@@ -20,6 +20,7 @@ type Fake struct {
 	GrimArgs        []string
 	Client          string
 	Disk            []ClientStatus
+	Home            string
 	Allow           bool
 	Logs            []string
 	Dispatch        [][]string
@@ -166,8 +167,40 @@ func (f *Fake) DefaultClient() string {
 }
 
 func (f *Fake) ClientsOnDisk() []ClientStatus {
+	if f.Home != "" {
+		return ScanClients(f)
+	}
 	if len(f.Disk) > 0 {
 		return f.Disk
 	}
 	return []ClientStatus{{Name: f.DefaultClient()}}
+}
+
+func (f *Fake) HomeDir() (string, error) {
+	if f.Home == "" {
+		return "", fmt.Errorf("home directory not set")
+	}
+	return f.Home, nil
+}
+
+func (f *Fake) Exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func (f *Fake) RemoveAll(path string) error {
+	if f.Home == "" {
+		return fmt.Errorf("home directory not set")
+	}
+	if !underDir(f.Home, path) {
+		return fmt.Errorf("remove outside fake home")
+	}
+	return os.RemoveAll(path)
+}
+
+func underDir(root, path string) bool {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	sep := string(os.PathSeparator)
+	return path == root || strings.HasPrefix(path, root+sep)
 }
