@@ -157,8 +157,11 @@ func TestDoctorOK(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d stderr=%s stdout=%s", code, errb, out)
 	}
-	if !h.Probed {
-		t.Fatal("doctor must run the grim capture probe")
+	if len(h.GrimArgs) < 2 || h.GrimArgs[0] != "-g" || h.GrimArgs[1] != host.GrimRegion {
+		t.Fatalf("grim argv want -g %q, got %q", host.GrimRegion, h.GrimArgs)
+	}
+	if strings.Contains(strings.Join(h.GrimArgs, " "), "0,0,1,1") {
+		t.Fatalf("comma geometry is invalid for grim: %q", h.GrimArgs)
 	}
 	var r map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(out), &r); err != nil {
@@ -205,8 +208,11 @@ func TestDoctorCaptureFailExit1(t *testing.T) {
 	if r.OK || r.Capture.OK {
 		t.Fatalf("expected capture fail: %s", out)
 	}
-	if !h.Probed {
+	if len(h.GrimArgs) == 0 {
 		t.Fatal("probe should still run when grim is present")
+	}
+	if strings.Contains(out, "omarchy pkg add grim") {
+		t.Fatalf("must not hint pkg add grim when grim is present: %s", out)
 	}
 }
 
@@ -240,7 +246,7 @@ func TestDoctorMissingToolHint(t *testing.T) {
 	if !strings.Contains(out, "omarchy pkg add grim") {
 		t.Fatalf("missing grim hint: %s", out)
 	}
-	if h.Probed {
+	if h.GrimArgs != nil {
 		t.Fatal("must not run grim when it is missing")
 	}
 	h2 := okHost()

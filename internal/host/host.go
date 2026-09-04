@@ -9,8 +9,8 @@ type Host interface {
 	Env(key string) string
 	// LookPath resolves an executable on PATH. Missing tools return an error.
 	LookPath(name string) (string, error)
-	// CaptureProbe actually runs grim. Tests stub this.
-	CaptureProbe() error
+	// Grim runs grim with args (no binary name). Doctor uses GrimProbeArgs.
+	Grim(args ...string) error
 	// DefaultClient is "grok" unless config says otherwise.
 	DefaultClient() string
 	// ClientsOnDisk reports skill/MCP presence. Always includes DefaultClient.
@@ -36,4 +36,12 @@ func ToolHint(bin string) string {
 		pkg = "wl-clipboard"
 	}
 	return "omarchy pkg add " + pkg
+}
+
+// GrimRegion is grim's slurp-style geometry: "x,y widthxheight".
+const GrimRegion = "0,0 1x1"
+
+// GrimProbeArgs is the grim argv for the doctor capture probe (no binary).
+func GrimProbeArgs(output string) []string {
+	return []string{"-g", GrimRegion, output}
 }

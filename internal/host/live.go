@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"strings"
 )
@@ -33,18 +32,8 @@ func (Live) LookPath(name string) (string, error) {
 	return exec.LookPath(name)
 }
 
-func (Live) CaptureProbe() error {
-	dir := os.Getenv("XDG_RUNTIME_DIR")
-	if dir == "" {
-		dir = filepath.Join(os.TempDir(), "kage-"+uidString())
-	}
-	dir = filepath.Join(dir, "kage")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	path := filepath.Join(dir, "doctor-probe.png")
-	defer os.Remove(path)
-	cmd := exec.Command("grim", "-g", "0,0,1,1", path)
+func (Live) Grim(args ...string) error {
+	cmd := exec.Command("grim", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
@@ -134,11 +123,4 @@ func ParseDefaultClient(data []byte) string {
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-func uidString() string {
-	if u, err := user.Current(); err == nil && u.Uid != "" {
-		return u.Uid
-	}
-	return "0"
 }

@@ -2,6 +2,8 @@ package doctor
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/6abe/kage/internal/host"
 )
@@ -73,10 +75,10 @@ func Run(h host.Host) (Report, int) {
 	case !r.Grim.Present:
 		r.Capture = Capture{OK: false, Error: "grim not found", Hint: host.ToolHint("grim")}
 	default:
-		if err := h.CaptureProbe(); err != nil {
-			cap := Capture{OK: false, Error: err.Error(), Hint: host.ToolHint("grim")}
+		if err := probeCapture(h); err != nil {
+			cap := Capture{OK: false, Error: err.Error()}
 			if r.WaylandDisplay == "" {
-				cap.Hint = "set WAYLAND_DISPLAY (Hyprland session) and install grim: " + host.ToolHint("grim")
+				cap.Hint = "set WAYLAND_DISPLAY (Hyprland session)"
 			}
 			r.Capture = cap
 		} else {
@@ -150,4 +152,18 @@ func dash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+func probeCapture(h host.Host) error {
+	dir := h.Env("XDG_RUNTIME_DIR")
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	dir = filepath.Join(dir, "kage")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "doctor-probe.png")
+	defer os.Remove(path)
+	return h.Grim(host.GrimProbeArgs(path)...)
 }

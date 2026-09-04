@@ -9,7 +9,7 @@ type Fake struct {
 	Environ    map[string]string
 	Paths      map[string]string
 	Probe      error
-	Probed     bool
+	GrimArgs   []string
 	Client     string
 	Disk       []ClientStatus
 }
@@ -41,8 +41,8 @@ func (f *Fake) LookPath(name string) (string, error) {
 	return "", fmt.Errorf("executable file not found in $PATH")
 }
 
-func (f *Fake) CaptureProbe() error {
-	f.Probed = true
+func (f *Fake) Grim(args ...string) error {
+	f.GrimArgs = append([]string(nil), args...)
 	return f.Probe
 }
 
