@@ -1049,7 +1049,7 @@ func TestSeeMissingFlagValues(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"see", "--window"}, "flag --window requires ADDRESS|CLASS|TITLE"},
+		{[]string{"see", "--window"}, "--window requires a value"},
 		{[]string{"see", "--monitor"}, "flag --monitor requires a name"},
 		{[]string{"see", "--max-width"}, "flag --max-width requires a positive integer"},
 	} {

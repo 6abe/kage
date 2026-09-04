@@ -14,6 +14,8 @@ import (
 	"github.com/6abe/kage/internal/see"
 )
 
+const usage = "kage windows|monitors|doctor|see|focus|type|press [--human]"
+
 type fail struct {
 	OK      bool          `json:"ok"`
 	Error   string        `json:"error"`
@@ -31,14 +33,15 @@ type monitorsOut struct {
 	Monitors []hypr.Monitor `json:"monitors"`
 }
 
-const usage = "kage windows|monitors|doctor|see [--monitor NAME|--all] [--window ADDRESS|CLASS|TITLE] [--annotate] [--path FILE] [--max-width N] [--human]"
-
-type parsed struct {
+type invocation struct {
 	cmd      string
 	human    bool
-	path     string
-	monitor  string
+	yes      bool
+	clear    bool
 	window   string
+	path     string
+	rest     []string
+	monitor  string
 	all      bool
 	annotate bool
 	maxWidth int
@@ -47,140 +50,204 @@ type parsed struct {
 
 // Run is the kage CLI. Tests call this with a fake Host.
 func Run(h host.Host, args []string, stdout, stderr io.Writer) int {
-	p, err := parseArgs(args)
+	inv, err := parseArgs(args)
 	if err != nil {
 		return writeFail(stderr, err.Error(), usage)
 	}
-	switch p.cmd {
+	switch inv.cmd {
 	case "help":
-		if p.human {
-			fmt.Fprintln(stdout, usage)
+		msg := usage + "\n  see [--monitor NAME|--all] [--window ADDRESS|CLASS|TITLE] [--annotate] [--path FILE] [--max-width N]\n  focus --window ADDRESS|CLASS|TITLE\n  type TEXT [--window ADDRESS|CLASS|TITLE] [--clear] [--yes]\n  press KEY [--window ADDRESS|CLASS|TITLE] [--yes]\n  --clear sends Ctrl+A then TEXT (empty TEXT also sends BackSpace)\n  type/press need --yes, KAGE_ALLOW_INPUT=1, or allow_input = true in config"
+		if inv.human {
+			fmt.Fprintln(stdout, msg)
 			return 0
 		}
-		return writeJSON(stdout, map[string]any{"ok": true, "usage": usage})
+		return writeJSON(stdout, map[string]any{"ok": true, "usage": msg})
 	case "windows":
-		return runWindows(h, p.human, stdout, stderr)
+		if code := rejectExtra(inv, stderr); code != 0 {
+			return code
+		}
+		return runWindows(h, inv.human, stdout, stderr)
 	case "monitors":
-		return runMonitors(h, p.human, stdout, stderr)
+		if code := rejectExtra(inv, stderr); code != 0 {
+			return code
+		}
+		return runMonitors(h, inv.human, stdout, stderr)
 	case "doctor":
-		return runDoctor(h, p.human, stdout, stderr)
+		if code := rejectExtra(inv, stderr); code != 0 {
+			return code
+		}
+		return runDoctor(h, inv.human, stdout, stderr)
 	case "see":
-		return runSee(h, p, stdout, stderr)
+		if code := rejectSee(inv, stderr); code != 0 {
+			return code
+		}
+		return runSee(h, inv, stdout, stderr)
+	case "focus":
+		if code := rejectSeeOnly(inv, stderr); code != 0 {
+			return code
+		}
+		return runFocus(h, inv, stdout, stderr)
+	case "type":
+		if code := rejectSeeOnly(inv, stderr); code != 0 {
+			return code
+		}
+		return runType(h, inv, stdout, stderr)
+	case "press":
+		if code := rejectSeeOnly(inv, stderr); code != 0 {
+			return code
+		}
+		return runPress(h, inv, stdout, stderr)
 	default:
-		return writeFail(stderr, "unknown command: "+p.cmd, usage)
+		return writeFail(stderr, "unknown command: "+inv.cmd, usage)
 	}
 }
 
-func parseArgs(args []string) (parsed, error) {
-	var p parsed
-	p.maxWidth = see.DefaultMaxWidth
+func parseArgs(args []string) (invocation, error) {
+	var inv invocation
+	inv.maxWidth = see.DefaultMaxWidth
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if a == "--" {
+			pos = append(pos, args[i+1:]...)
+			break
+		}
 		switch {
 		case a == "--human":
-			p.human = true
+			inv.human = true
+		case a == "--yes":
+			inv.yes = true
+		case a == "--clear":
+			inv.clear = true
 		case a == "--help" || a == "-h":
-			p.cmd = "help"
-			return p, nil
+			inv.cmd = "help"
+			return inv, nil
 		case a == "--all":
-			p.all = true
+			inv.all = true
 		case a == "--annotate":
-			p.annotate = true
+			inv.annotate = true
 		case a == "--path":
 			v, err := flagValue(args, &i, "--path")
 			if err != nil {
-				return parsed{}, err
+				return inv, err
 			}
-			p.path = v
+			inv.path = v
 		case strings.HasPrefix(a, "--path="):
-			p.path = strings.TrimPrefix(a, "--path=")
-			if p.path == "" {
-				return parsed{}, fmt.Errorf("flag --path requires a file path")
+			inv.path = strings.TrimPrefix(a, "--path=")
+			if inv.path == "" {
+				return inv, fmt.Errorf("flag --path requires a file path")
 			}
 		case a == "--monitor":
 			v, err := flagValue(args, &i, "--monitor")
 			if err != nil {
-				return parsed{}, err
+				return inv, err
 			}
-			p.monitor = v
+			inv.monitor = v
 		case strings.HasPrefix(a, "--monitor="):
-			p.monitor = strings.TrimPrefix(a, "--monitor=")
-			if p.monitor == "" {
-				return parsed{}, fmt.Errorf("flag --monitor requires a name")
+			inv.monitor = strings.TrimPrefix(a, "--monitor=")
+			if inv.monitor == "" {
+				return inv, fmt.Errorf("flag --monitor requires a name")
 			}
 		case a == "--window":
 			v, err := flagValue(args, &i, "--window")
 			if err != nil {
-				return parsed{}, err
+				return inv, err
 			}
-			p.window = v
+			inv.window = v
 		case strings.HasPrefix(a, "--window="):
-			p.window = strings.TrimPrefix(a, "--window=")
-			if p.window == "" {
-				return parsed{}, fmt.Errorf("flag --window requires ADDRESS|CLASS|TITLE")
+			inv.window = strings.TrimPrefix(a, "--window=")
+			if inv.window == "" {
+				return inv, fmt.Errorf("--window requires a value")
 			}
 		case a == "--max-width":
 			v, err := flagValue(args, &i, "--max-width")
 			if err != nil {
-				return parsed{}, err
+				return inv, err
 			}
 			n, err := parseMaxWidth(v)
 			if err != nil {
-				return parsed{}, err
+				return inv, err
 			}
-			p.maxWidth = n
-			p.maxSet = true
+			inv.maxWidth = n
+			inv.maxSet = true
 		case strings.HasPrefix(a, "--max-width="):
 			n, err := parseMaxWidth(strings.TrimPrefix(a, "--max-width="))
 			if err != nil {
-				return parsed{}, err
+				return inv, err
 			}
-			p.maxWidth = n
-			p.maxSet = true
+			inv.maxWidth = n
+			inv.maxSet = true
 		case strings.HasPrefix(a, "-"):
-			return parsed{}, fmt.Errorf("unknown flag: %s", a)
+			return inv, fmt.Errorf("unknown flag: %s", a)
 		default:
 			pos = append(pos, a)
 		}
 	}
+	if inv.cmd == "help" {
+		return inv, nil
+	}
 	if len(pos) == 0 {
-		return parsed{}, fmt.Errorf("usage: %s", usage)
+		return inv, fmt.Errorf("usage: %s", usage)
 	}
-	if len(pos) > 1 {
-		return parsed{}, fmt.Errorf("unexpected arguments: %s", strings.Join(pos[1:], " "))
+	inv.cmd = pos[0]
+	inv.rest = pos[1:]
+	if inv.path != "" && inv.cmd != "see" {
+		return inv, fmt.Errorf("unknown flag: --path")
 	}
-	p.cmd = pos[0]
-	if p.cmd != "see" {
-		switch {
-		case p.path != "":
-			return parsed{}, fmt.Errorf("unknown flag: --path")
-		case p.annotate:
-			return parsed{}, fmt.Errorf("unknown flag: --annotate")
-		case p.all:
-			return parsed{}, fmt.Errorf("unknown flag: --all")
-		case p.monitor != "":
-			return parsed{}, fmt.Errorf("unknown flag: --monitor")
-		case p.window != "":
-			return parsed{}, fmt.Errorf("unknown flag: --window")
-		case p.maxSet:
-			return parsed{}, fmt.Errorf("unknown flag: --max-width")
-		}
+	return inv, nil
+}
+
+func rejectExtra(inv invocation, stderr io.Writer) int {
+	if inv.window != "" {
+		return writeFail(stderr, "unexpected flag: --window", usage)
+	}
+	if code := rejectSeeOnly(inv, stderr); code != 0 {
+		return code
+	}
+	if inv.clear {
+		return writeFail(stderr, "unexpected flag: --clear", usage)
+	}
+	if len(inv.rest) > 0 {
+		return writeFail(stderr, "unexpected arguments: "+strings.Join(inv.rest, " "), usage)
+	}
+	return 0
+}
+
+func rejectSeeOnly(inv invocation, stderr io.Writer) int {
+	switch {
+	case inv.annotate:
+		return writeFail(stderr, "unknown flag: --annotate", usage)
+	case inv.all:
+		return writeFail(stderr, "unknown flag: --all", usage)
+	case inv.monitor != "":
+		return writeFail(stderr, "unknown flag: --monitor", usage)
+	case inv.maxSet:
+		return writeFail(stderr, "unknown flag: --max-width", usage)
+	}
+	return 0
+}
+
+func rejectSee(inv invocation, stderr io.Writer) int {
+	if inv.clear {
+		return writeFail(stderr, "unexpected flag: --clear", usage)
+	}
+	if len(inv.rest) > 0 {
+		return writeFail(stderr, "unexpected arguments: "+strings.Join(inv.rest, " "), usage)
 	}
 	n := 0
-	if p.all {
+	if inv.all {
 		n++
 	}
-	if p.monitor != "" {
+	if inv.monitor != "" {
 		n++
 	}
-	if p.window != "" {
+	if inv.window != "" {
 		n++
 	}
 	if n > 1 {
-		return parsed{}, fmt.Errorf("--monitor, --window, and --all are mutually exclusive")
+		return writeFail(stderr, "--monitor, --window, and --all are mutually exclusive", usage)
 	}
-	return p, nil
+	return 0
 }
 
 func flagValue(args []string, i *int, name string) (string, error) {
@@ -191,7 +258,7 @@ func flagValue(args []string, i *int, name string) (string, error) {
 		case "--monitor":
 			return "", fmt.Errorf("flag --monitor requires a name")
 		case "--window":
-			return "", fmt.Errorf("flag --window requires ADDRESS|CLASS|TITLE")
+			return "", fmt.Errorf("--window requires a value")
 		case "--max-width":
 			return "", fmt.Errorf("flag --max-width requires a positive integer")
 		default:
@@ -264,7 +331,7 @@ func runMonitors(h host.Host, human bool, stdout, stderr io.Writer) int {
 	return writeJSON(stdout, monitorsOut{OK: true, Monitors: mons})
 }
 
-func runSee(h host.Host, p parsed, stdout, stderr io.Writer) int {
+func runSee(h host.Host, inv invocation, stdout, stderr io.Writer) int {
 	if _, err := h.LookPath("hyprctl"); err != nil {
 		return writeFail(stderr, "hyprctl not found", host.ToolHint("hyprctl"))
 	}
@@ -272,15 +339,15 @@ func runSee(h host.Host, p parsed, stdout, stderr io.Writer) int {
 		return writeFail(stderr, "grim not found", host.ToolHint("grim"))
 	}
 	snap, err := see.Capture(h, see.Options{
-		Path:     p.path,
-		Monitor:  p.monitor,
-		Window:   p.window,
-		All:      p.all,
-		Annotate: p.annotate,
-		MaxWidth: p.maxWidth,
+		Path:     inv.path,
+		Monitor:  inv.monitor,
+		Window:   inv.window,
+		All:      inv.all,
+		Annotate: inv.annotate,
+		MaxWidth: inv.maxWidth,
 	})
 	if err != nil {
-		var amb *hypr.AmbiguousError
+		var amb *see.AmbiguousError
 		if errors.As(err, &amb) {
 			return writeFailCode(stderr, fail{
 				OK:      false,
@@ -300,7 +367,7 @@ func runSee(h host.Host, p parsed, stdout, stderr io.Writer) int {
 		}
 		return writeFail(stderr, err.Error(), hint)
 	}
-	if p.human {
+	if inv.human {
 		fmt.Fprintf(stdout, "%s  %s  %dx%d  %s\n",
 			snap.SnapshotID, snap.Monitor.Name, snap.Width, snap.Height, snap.Path)
 		return 0

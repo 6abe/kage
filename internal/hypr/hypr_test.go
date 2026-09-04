@@ -49,3 +49,67 @@ func TestFocusedMonitor(t *testing.T) {
 		t.Fatal("expected no focused monitor")
 	}
 }
+
+func sampleWins() []Window {
+	return []Window{
+		{Address: "0x123", Class: "google-chrome", Title: "GitHub"},
+		{Address: "0x456", Class: "kitty", Title: "term"},
+		{Address: "0x789", Class: "kitty", Title: "logs"},
+		{Address: "0xabc", Class: "firefox", Title: "GitHub — Mozilla Firefox"},
+	}
+}
+
+func TestMatchWindowAddressClassTitle(t *testing.T) {
+	wins := sampleWins()
+	w, _, err := MatchWindow(wins, "0x123")
+	if err != nil || w.Address != "0x123" {
+		t.Fatalf("address: %v %+v", err, w)
+	}
+	w, _, err = MatchWindow(wins, "0X123")
+	if err != nil || w.Address != "0x123" {
+		t.Fatalf("address fold: %v %+v", err, w)
+	}
+	w, _, err = MatchWindow(wins, "Google-Chrome")
+	if err != nil || w.Address != "0x123" {
+		t.Fatalf("class: %v %+v", err, w)
+	}
+	w, _, err = MatchWindow(wins, "Mozilla")
+	if err != nil || w.Address != "0xabc" {
+		t.Fatalf("title: %v %+v", err, w)
+	}
+	_, _, err = MatchWindow(wins, "mozilla")
+	if err != ErrNotFound {
+		t.Fatalf("title is case-sensitive: %v", err)
+	}
+	_, matches, err := MatchWindow(wins, "kitty")
+	if err != ErrAmbiguous || len(matches) != 2 {
+		t.Fatalf("ambiguous class: %v %d", err, len(matches))
+	}
+	_, matches, err = MatchWindow(wins, "GitHub")
+	if err != ErrAmbiguous || len(matches) != 2 {
+		t.Fatalf("ambiguous title: %v %d", err, len(matches))
+	}
+	_, _, err = MatchWindow(wins, "nope")
+	if err != ErrNotFound {
+		t.Fatalf("missing: %v", err)
+	}
+}
+
+func TestFocusDispatchLua(t *testing.T) {
+	got := FocusDispatch("0x559ae3fc8aa0")
+	want := "hl.dsp.focus({ window = 'address:0x559ae3fc8aa0' })"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestMatchWindowClassBeforeTitle(t *testing.T) {
+	wins := []Window{
+		{Address: "0x1", Class: "kitty", Title: "foo"},
+		{Address: "0x2", Class: "firefox", Title: "kitty docs"},
+	}
+	w, _, err := MatchWindow(wins, "kitty")
+	if err != nil || w.Address != "0x1" {
+		t.Fatalf("%v %+v", err, w)
+	}
+}

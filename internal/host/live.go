@@ -45,16 +45,67 @@ func (Live) Grim(args ...string) error {
 	return nil
 }
 
-func (l Live) DefaultClient() string {
+func (Live) HyprctlDispatch(args ...string) error {
+	cmd := exec.Command("hyprctl", append([]string{"dispatch"}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return fmt.Errorf("hyprctl dispatch: %w", err)
+		}
+		return fmt.Errorf("hyprctl dispatch: %w: %s", err, msg)
+	}
+	return nil
+}
+
+func (Live) Wtype(args ...string) error {
+	cmd := exec.Command("wtype", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return fmt.Errorf("wtype: %w", err)
+		}
+		return fmt.Errorf("wtype: %w: %s", err, msg)
+	}
+	return nil
+}
+
+func (Live) AllowInput() bool {
+	return ParseConfig(readUserConfig()).AllowInput
+}
+
+func (Live) Log(line string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "grok"
+		return
+	}
+	dir := filepath.Join(home, ".local", "state", "kage")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "kage.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	_, _ = fmt.Fprintln(f, line)
+	_ = f.Close()
+}
+
+func (Live) DefaultClient() string {
+	return ParseDefaultClient(readUserConfig())
+}
+
+func readUserConfig() []byte {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
 	}
 	b, err := os.ReadFile(filepath.Join(home, ".config", "kage", "config.toml"))
 	if err != nil {
-		return "grok"
+		return nil
 	}
-	return ParseDefaultClient(b)
+	return b
 }
 
 func (l Live) ClientsOnDisk() []ClientStatus {
@@ -101,23 +152,40 @@ func (l Live) ClientsOnDisk() []ClientStatus {
 	return out
 }
 
-// ParseDefaultClient reads default_client from config.toml bytes.
-func ParseDefaultClient(data []byte) string {
+// FileConfig is the parsed ~/.config/kage/config.toml.
+type FileConfig struct {
+	DefaultClient string
+	AllowInput    bool
+}
+
+// ParseConfig reads default_client and allow_input from config.toml bytes.
+func ParseConfig(data []byte) FileConfig {
+	cfg := FileConfig{DefaultClient: "grok"}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		key, rest, ok := strings.Cut(line, "=")
-		if !ok || strings.TrimSpace(key) != "default_client" {
+		if !ok {
 			continue
 		}
 		v := strings.Trim(strings.TrimSpace(rest), `"'`)
-		if v != "" {
-			return v
+		switch strings.TrimSpace(key) {
+		case "default_client":
+			if v != "" {
+				cfg.DefaultClient = v
+			}
+		case "allow_input":
+			cfg.AllowInput = v == "true" || v == "1"
 		}
 	}
-	return "grok"
+	return cfg
+}
+
+// ParseDefaultClient reads default_client from config.toml bytes.
+func ParseDefaultClient(data []byte) string {
+	return ParseConfig(data).DefaultClient
 }
 
 func exists(path string) bool {

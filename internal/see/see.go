@@ -2,6 +2,7 @@ package see
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -70,6 +71,18 @@ type Options struct {
 	Annotate bool
 	MaxWidth int
 }
+
+// AmbiguousError is a window query that matched more than one client.
+type AmbiguousError struct {
+	Query   string
+	Matches []hypr.Window
+}
+
+func (e *AmbiguousError) Error() string {
+	return fmt.Sprintf("ambiguous window match %q (%d clients)", e.Query, len(e.Matches))
+}
+
+func (e *AmbiguousError) Unwrap() error { return hypr.ErrAmbiguous }
 
 type target struct {
 	grim   []string
@@ -168,7 +181,13 @@ func resolveTarget(mons []hypr.Monitor, wins []hypr.Window, opt Options) (target
 			},
 		}, nil
 	case opt.Window != "":
-		w, err := hypr.MatchOne(wins, opt.Window)
+		w, matches, err := hypr.MatchWindow(wins, opt.Window)
+		if errors.Is(err, hypr.ErrAmbiguous) {
+			return target{}, &AmbiguousError{Query: opt.Window, Matches: matches}
+		}
+		if errors.Is(err, hypr.ErrNotFound) {
+			return target{}, fmt.Errorf("no window matches %q", opt.Window)
+		}
 		if err != nil {
 			return target{}, err
 		}

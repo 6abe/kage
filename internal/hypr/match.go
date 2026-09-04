@@ -1,67 +1,72 @@
 package hypr
 
 import (
-	"fmt"
+	"errors"
 	"strings"
 )
 
-// AmbiguousError means a query matched more than one client; do not pick a winner.
-type AmbiguousError struct {
-	Query   string
-	Matches []Window
-}
+var (
+	ErrNotFound  = errors.New("no matching window")
+	ErrAmbiguous = errors.New("ambiguous window match")
+	ErrNoFocus   = errors.New("no focused window")
+)
 
-func (e *AmbiguousError) Error() string {
-	return fmt.Sprintf("ambiguous window match %q (%d clients)", e.Query, len(e.Matches))
-}
-
-// Match returns clients for query: exact address (0x...), else case-insensitive
-// class, else case-insensitive title substring. Never ranks a silent winner.
-func Match(windows []Window, query string) []Window {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return nil
+// MatchWindow resolves ADDRESS (0x...), then class (case-insensitive), then title substring.
+// Two or more hits return ErrAmbiguous with the list; never pick silently.
+func MatchWindow(wins []Window, query string) (Window, []Window, error) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return Window{}, nil, ErrNotFound
 	}
-	if strings.HasPrefix(strings.ToLower(query), "0x") {
-		var out []Window
-		for _, w := range windows {
-			if strings.EqualFold(w.Address, query) {
-				out = append(out, w)
-			}
-		}
-		return out
+	if strings.HasPrefix(strings.ToLower(q), "0x") {
+		return unique(filter(wins, func(w Window) bool {
+			return strings.EqualFold(w.Address, q)
+		}))
 	}
-	var classHits []Window
-	for _, w := range windows {
-		if strings.EqualFold(w.Class, query) {
-			classHits = append(classHits, w)
-		}
-	}
+	classHits := filter(wins, func(w Window) bool {
+		return strings.EqualFold(w.Class, q)
+	})
 	if len(classHits) > 0 {
-		return classHits
+		return unique(classHits)
 	}
-	q := strings.ToLower(query)
-	var titleHits []Window
-	for _, w := range windows {
-		if strings.Contains(strings.ToLower(w.Title), q) {
-			titleHits = append(titleHits, w)
-		}
-	}
-	return titleHits
+	return unique(filter(wins, func(w Window) bool {
+		return strings.Contains(w.Title, q)
+	}))
 }
 
-func MatchOne(windows []Window, query string) (Window, error) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return Window{}, fmt.Errorf("empty window query")
+// FocusDispatch is one `hyprctl dispatch` argument. Hyprland 0.56 is Lua;
+// `focuswindow address:0x…` is a parse error.
+func FocusDispatch(address string) string {
+	return "hl.dsp.focus({ window = 'address:" + address + "' })"
+}
+
+// FocusedWindow returns the focused client, or ErrNoFocus.
+func FocusedWindow(wins []Window) (Window, error) {
+	for _, w := range wins {
+		if w.Focus {
+			return w, nil
+		}
 	}
-	hits := Match(windows, query)
+	return Window{}, ErrNoFocus
+}
+
+func filter(wins []Window, ok func(Window) bool) []Window {
+	var out []Window
+	for _, w := range wins {
+		if ok(w) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func unique(hits []Window) (Window, []Window, error) {
 	switch len(hits) {
 	case 0:
-		return Window{}, fmt.Errorf("no window matches %q", query)
+		return Window{}, nil, ErrNotFound
 	case 1:
-		return hits[0], nil
+		return hits[0], nil, nil
 	default:
-		return Window{}, &AmbiguousError{Query: query, Matches: hits}
+		return Window{}, hits, ErrAmbiguous
 	}
 }
