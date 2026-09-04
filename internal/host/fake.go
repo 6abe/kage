@@ -11,21 +11,24 @@ import (
 
 // Fake is an in-memory Host for tests. It never talks to a compositor.
 type Fake struct {
-	JSON        map[string][]byte
-	HyprctlErr  error
-	Environ     map[string]string
-	Paths       map[string]string
-	Lookups     []string
-	Probe       error
-	GrimArgs    []string
-	Client      string
-	Disk        []ClientStatus
-	Allow       bool
-	Logs        []string
-	Dispatch    [][]string
-	DispatchErr error
-	WtypeCalls  [][]string
-	WtypeErr    error
+	JSON            map[string][]byte
+	HyprctlErr      error
+	Environ         map[string]string
+	Paths           map[string]string
+	Lookups         []string
+	Probe           error
+	GrimArgs        []string
+	Client          string
+	Disk            []ClientStatus
+	Allow           bool
+	Logs            []string
+	Dispatch        [][]string
+	DispatchErr     error
+	WtypeCalls      [][]string
+	WtypeErr        error
+	YdotoolCalls    [][]string
+	YdotoolErr      error
+	SendShortcutErr error
 	// ImageSize, if set, is the PNG grim writes. Otherwise -g WxH, else 8x4.
 	ImageSize image.Point
 }
@@ -50,6 +53,9 @@ func (f *Fake) Env(key string) string {
 
 func (f *Fake) HyprctlDispatch(args ...string) error {
 	f.Dispatch = append(f.Dispatch, append([]string(nil), args...))
+	if len(args) > 0 && strings.Contains(args[0], "send_shortcut") && f.SendShortcutErr != nil {
+		return f.SendShortcutErr
+	}
 	return f.DispatchErr
 }
 
@@ -66,6 +72,11 @@ func (f *Fake) LookPath(name string) (string, error) {
 func (f *Fake) Wtype(args ...string) error {
 	f.WtypeCalls = append(f.WtypeCalls, append([]string(nil), args...))
 	return f.WtypeErr
+}
+
+func (f *Fake) Ydotool(args ...string) error {
+	f.YdotoolCalls = append(f.YdotoolCalls, append([]string(nil), args...))
+	return f.YdotoolErr
 }
 
 func (f *Fake) AllowInput() bool {

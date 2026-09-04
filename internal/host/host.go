@@ -15,6 +15,8 @@ type Host interface {
 	Grim(args ...string) error
 	// Wtype runs wtype with args (no binary name). Errors must not include args.
 	Wtype(args ...string) error
+	// Ydotool runs ydotool with args (no binary name). Errors must not include args.
+	Ydotool(args ...string) error
 	// AllowInput is true when config has allow_input = true.
 	AllowInput() bool
 	// Log appends one line to the kage log. Callers must never pass keystrokes.

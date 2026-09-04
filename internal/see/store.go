@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/6abe/kage/internal/capture"
 	"github.com/6abe/kage/internal/host"
@@ -39,6 +40,9 @@ func persist(h host.Host, snap Snapshot) error {
 	if err := h.WriteFile(lookup, b); err != nil {
 		return err
 	}
+	if err := h.WriteFile(filepath.Join(dir, "latest"), []byte(snap.SnapshotID+"\n")); err != nil {
+		return err
+	}
 	if snap.Path == "" {
 		return nil
 	}
@@ -67,4 +71,35 @@ func Load(h host.Host, id string) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("snapshot %q: %w", id, err)
 	}
 	return snap, nil
+}
+
+// Latest reads the most recent see snapshot (the last persist).
+func Latest(h host.Host) (Snapshot, error) {
+	b, err := h.ReadFile(filepath.Join(capture.Dir(h), "latest"))
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("no see snapshot")
+	}
+	id := strings.TrimSpace(string(b))
+	if id == "" {
+		return Snapshot{}, fmt.Errorf("no see snapshot")
+	}
+	return Load(h, id)
+}
+
+// WindowByID finds an annotated window id from a see snapshot.
+func WindowByID(snap Snapshot, id int) (Window, error) {
+	for _, w := range snap.Windows {
+		if w.ID == id {
+			return w, nil
+		}
+	}
+	return Window{}, fmt.Errorf("no window id %d in snapshot %s", id, snap.SnapshotID)
+}
+
+// Center is the window midpoint in global compositor pixels.
+func (w Window) Center() (x, y int, err error) {
+	if w.Size[0] <= 0 || w.Size[1] <= 0 {
+		return 0, 0, fmt.Errorf("window %s has empty geometry", w.Address)
+	}
+	return w.At[0] + w.Size[0]/2, w.At[1] + w.Size[1]/2, nil
 }

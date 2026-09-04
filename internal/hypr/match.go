@@ -40,6 +40,11 @@ func FocusDispatch(address string) string {
 	return "hl.dsp.focus({ window = 'address:" + address + "' })"
 }
 
+// SendShortcutDispatch is one `hyprctl dispatch` argument for a key chord.
+func SendShortcutDispatch(mods, key string) string {
+	return "hl.dsp.send_shortcut({ mods = '" + mods + "', key = '" + key + "' })"
+}
+
 // FocusedWindow returns the focused client, or ErrNoFocus.
 func FocusedWindow(wins []Window) (Window, error) {
 	for _, w := range wins {

@@ -14,7 +14,7 @@ import (
 	"github.com/6abe/kage/internal/see"
 )
 
-const usage = "kage windows|monitors|doctor|see|focus|type|press [--human]"
+const usage = "kage windows|monitors|doctor|see|focus|type|press|click|hotkey|dispatch [--human]"
 
 type fail struct {
 	OK      bool          `json:"ok"`
@@ -46,6 +46,10 @@ type invocation struct {
 	annotate bool
 	maxWidth int
 	maxSet   bool
+	at       string
+	on       string
+	button   string
+	snapshot string
 }
 
 // Run is the kage CLI. Tests call this with a fake Host.
@@ -56,7 +60,7 @@ func Run(h host.Host, args []string, stdout, stderr io.Writer) int {
 	}
 	switch inv.cmd {
 	case "help":
-		msg := usage + "\n  see [--monitor NAME|--all] [--window ADDRESS|CLASS|TITLE] [--annotate] [--path FILE] [--max-width N]\n  focus --window ADDRESS|CLASS|TITLE\n  type TEXT [--window ADDRESS|CLASS|TITLE] [--clear] [--yes]\n  press KEY [--window ADDRESS|CLASS|TITLE] [--yes]\n  --clear sends Ctrl+A then TEXT (empty TEXT also sends BackSpace)\n  type/press need --yes, KAGE_ALLOW_INPUT=1, or allow_input = true in config"
+		msg := usage + "\n  see [--monitor NAME|--all] [--window ADDRESS|CLASS|TITLE] [--annotate] [--path FILE] [--max-width N]\n  focus --window ADDRESS|CLASS|TITLE\n  type TEXT [--window ADDRESS|CLASS|TITLE] [--clear] [--yes]\n  press KEY [--window ADDRESS|CLASS|TITLE] [--yes]\n  click --at X,Y | --on ID [--snapshot ID] [--button left|right|middle] [--window ADDRESS] [--yes]\n  hotkey CHORD [--yes]\n  dispatch <hyprctl dispatch args...>\n  --clear sends Ctrl+A then TEXT (empty TEXT also sends BackSpace)\n  click/type/press/hotkey need --yes, KAGE_ALLOW_INPUT=1, or allow_input = true in config"
 		if inv.human {
 			fmt.Fprintln(stdout, msg)
 			return 0
@@ -97,6 +101,21 @@ func Run(h host.Host, args []string, stdout, stderr io.Writer) int {
 			return code
 		}
 		return runPress(h, inv, stdout, stderr)
+	case "click":
+		if code := rejectSeeOnly(inv, stderr); code != 0 {
+			return code
+		}
+		return runClick(h, inv, stdout, stderr)
+	case "hotkey":
+		if code := rejectSeeOnly(inv, stderr); code != 0 {
+			return code
+		}
+		return runHotkey(h, inv, stdout, stderr)
+	case "dispatch":
+		if code := rejectSeeOnly(inv, stderr); code != 0 {
+			return code
+		}
+		return runDispatch(h, inv, stdout, stderr)
 	default:
 		return writeFail(stderr, "unknown command: "+inv.cmd, usage)
 	}
@@ -177,6 +196,50 @@ func parseArgs(args []string) (invocation, error) {
 			}
 			inv.maxWidth = n
 			inv.maxSet = true
+		case a == "--at":
+			v, err := flagValue(args, &i, "--at")
+			if err != nil {
+				return inv, err
+			}
+			inv.at = v
+		case strings.HasPrefix(a, "--at="):
+			inv.at = strings.TrimPrefix(a, "--at=")
+			if inv.at == "" {
+				return inv, fmt.Errorf("--at requires X,Y")
+			}
+		case a == "--on":
+			v, err := flagValue(args, &i, "--on")
+			if err != nil {
+				return inv, err
+			}
+			inv.on = v
+		case strings.HasPrefix(a, "--on="):
+			inv.on = strings.TrimPrefix(a, "--on=")
+			if inv.on == "" {
+				return inv, fmt.Errorf("--on requires an annotated window id")
+			}
+		case a == "--button":
+			v, err := flagValue(args, &i, "--button")
+			if err != nil {
+				return inv, err
+			}
+			inv.button = v
+		case strings.HasPrefix(a, "--button="):
+			inv.button = strings.TrimPrefix(a, "--button=")
+			if inv.button == "" {
+				return inv, fmt.Errorf("button must be left, right, or middle")
+			}
+		case a == "--snapshot":
+			v, err := flagValue(args, &i, "--snapshot")
+			if err != nil {
+				return inv, err
+			}
+			inv.snapshot = v
+		case strings.HasPrefix(a, "--snapshot="):
+			inv.snapshot = strings.TrimPrefix(a, "--snapshot=")
+			if inv.snapshot == "" {
+				return inv, fmt.Errorf("flag --snapshot requires a snapshot id")
+			}
 		case strings.HasPrefix(a, "-"):
 			return inv, fmt.Errorf("unknown flag: %s", a)
 		default:
@@ -193,6 +256,18 @@ func parseArgs(args []string) (invocation, error) {
 	inv.rest = pos[1:]
 	if inv.path != "" && inv.cmd != "see" {
 		return inv, fmt.Errorf("unknown flag: --path")
+	}
+	if inv.cmd != "click" {
+		switch {
+		case inv.at != "":
+			return inv, fmt.Errorf("unknown flag: --at")
+		case inv.on != "":
+			return inv, fmt.Errorf("unknown flag: --on")
+		case inv.button != "":
+			return inv, fmt.Errorf("unknown flag: --button")
+		case inv.snapshot != "":
+			return inv, fmt.Errorf("unknown flag: --snapshot")
+		}
 	}
 	return inv, nil
 }
@@ -251,7 +326,7 @@ func rejectSee(inv invocation, stderr io.Writer) int {
 }
 
 func flagValue(args []string, i *int, name string) (string, error) {
-	if *i+1 >= len(args) || strings.HasPrefix(args[*i+1], "-") {
+	if *i+1 >= len(args) || isFlag(args[*i+1]) {
 		switch name {
 		case "--path":
 			return "", fmt.Errorf("flag --path requires a file path")
@@ -261,12 +336,30 @@ func flagValue(args []string, i *int, name string) (string, error) {
 			return "", fmt.Errorf("--window requires a value")
 		case "--max-width":
 			return "", fmt.Errorf("flag --max-width requires a positive integer")
+		case "--at":
+			return "", fmt.Errorf("--at requires X,Y")
+		case "--on":
+			return "", fmt.Errorf("--on requires an annotated window id")
+		case "--button":
+			return "", fmt.Errorf("button must be left, right, or middle")
+		case "--snapshot":
+			return "", fmt.Errorf("flag --snapshot requires a snapshot id")
 		default:
 			return "", fmt.Errorf("flag %s requires a value", name)
 		}
 	}
 	*i++
 	return args[*i], nil
+}
+
+func isFlag(s string) bool {
+	if s == "-" || !strings.HasPrefix(s, "-") {
+		return false
+	}
+	if len(s) > 1 && s[1] >= '0' && s[1] <= '9' {
+		return false
+	}
+	return true
 }
 
 func parseMaxWidth(s string) (int, error) {

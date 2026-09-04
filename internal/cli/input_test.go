@@ -239,6 +239,7 @@ func TestObserveUngated(t *testing.T) {
 		{"doctor"},
 		{"see"},
 		{"focus", "--window", "0x123"},
+		{"dispatch", "hl.dsp.window.fullscreen()"},
 	} {
 		_, errb, code := execCLI(h, args...)
 		if strings.Contains(errb, "input not allowed") {

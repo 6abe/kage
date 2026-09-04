@@ -71,6 +71,30 @@ func (Live) Wtype(args ...string) error {
 	return nil
 }
 
+func (Live) Ydotool(args ...string) error {
+	cmd := exec.Command("ydotool", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if ydotoolDaemonDown(msg, err) {
+			return fmt.Errorf("ydotool not running")
+		}
+		if msg == "" {
+			return fmt.Errorf("ydotool: %w", err)
+		}
+		return fmt.Errorf("ydotool: %w: %s", err, msg)
+	}
+	return nil
+}
+
+func ydotoolDaemonDown(msg string, err error) bool {
+	s := strings.ToLower(msg + " " + err.Error())
+	return strings.Contains(s, "connect") ||
+		strings.Contains(s, "socket") ||
+		strings.Contains(s, "no such file") ||
+		strings.Contains(s, "ydotoold")
+}
+
 func (Live) AllowInput() bool {
 	return ParseConfig(readUserConfig()).AllowInput
 }

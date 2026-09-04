@@ -103,6 +103,19 @@ func TestFocusDispatchLua(t *testing.T) {
 	}
 }
 
+func TestSendShortcutDispatchLua(t *testing.T) {
+	got := SendShortcutDispatch("CTRL", "C")
+	want := "hl.dsp.send_shortcut({ mods = 'CTRL', key = 'C' })"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	got = SendShortcutDispatch("", "Return")
+	want = "hl.dsp.send_shortcut({ mods = '', key = 'Return' })"
+	if got != want {
+		t.Fatalf("empty mods %q", got)
+	}
+}
+
 func TestMatchWindowClassBeforeTitle(t *testing.T) {
 	wins := []Window{
 		{Address: "0x1", Class: "kitty", Title: "foo"},
