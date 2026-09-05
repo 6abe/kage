@@ -87,7 +87,7 @@ Exact `address` (`0x...`), or first match of `class` (case-insensitive), or subs
 
 Exactly one of `--at X,Y` or `--on ID`.
 
-`--at` is global compositor coords. Needs ydotool. If ydotoold is down, error with an install hint. Do not fake it.
+`--at` is global compositor coords. Needs ydotool. If ydotoold is down, error with an install hint (`systemctl --user start ydotool.service` — not `ydotoold`). Do not fake it.
 
 `--on N` is the annotated window id from the last see snapshot (or `--snapshot ID`). Focus that window, then click its center.
 

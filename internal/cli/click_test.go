@@ -245,7 +245,7 @@ func TestClickMissingYdotoolHint(t *testing.T) {
 	if !strings.Contains(errb, `"ok":false`) || !strings.Contains(errb, "ydotool not found") {
 		t.Fatalf("stderr %s", errb)
 	}
-	if !strings.Contains(errb, "omarchy pkg add ydotool") || !strings.Contains(errb, "ydotoold") {
+	if !strings.Contains(errb, "omarchy pkg add ydotool") || !strings.Contains(errb, "ydotool.service") {
 		t.Fatalf("hint %s", errb)
 	}
 	if len(h.YdotoolCalls) != 0 {
@@ -271,7 +271,7 @@ func TestClickMissingYdotoolHint(t *testing.T) {
 	if code == 0 || !strings.Contains(errb, "ydotool not running") {
 		t.Fatalf("daemon down: %s", errb)
 	}
-	if !strings.Contains(errb, "systemctl --user start ydotoold") {
+	if !strings.Contains(errb, "systemctl --user start ydotool.service") {
 		t.Fatalf("hint %s", errb)
 	}
 }

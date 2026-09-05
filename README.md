@@ -2,24 +2,38 @@
 
 ![Kage](assets/kage.jpg)
 
-A Peekaboo-style desktop observer for **Omarchy Linux** (Arch + Hyprland + Wayland). Any coding agent that can run a CLI or speak MCP can drive it. Default install target is **Grok Build** (`grok`).
+A desktop observer for **Omarchy Linux** (Arch + Hyprland + Wayland). Any coding agent that can run a CLI or speak MCP can drive this session. Default install target is **Grok Build** (`grok`).
 
 Kage is Japanese for shadow. The binary is `kage`. Observe first. Act only when allowed.
 
-This repo is the spec. Code comes later.
+## Loop
 
-## What it does
-
-A coding agent can already run a shell and read a PNG. It cannot list Hyprland windows, grab a monitor without hanging on `slurp`, or click/type in a GUI app.
-
-Kage is that missing loop:
-
-1. `kage see` writes a screenshot and JSON (monitors, windows, focused client, path).
+1. `kage see --annotate` writes a PNG and JSON (monitors, windows, focused client, path).
 2. The agent reads the PNG.
 3. `kage click` / `type` / `press` act on that snapshot.
 4. `kage see` again to verify.
 
-MCP is a thin stdio wrapper around the same CLI. Kage does not ship an LLM loop and does not pick a model. `kage install` wires the calling agent. With no args, that agent is Grok.
+MCP is a thin stdio wrapper around the same CLI. Kage does not call an LLM and does not pick a model. `kage install` with no args wires Grok. Claude, Cursor, and Codex are first-class too.
+
+JSON on stdout by default. `--human` is the only prose path. Screenshots stay files. Never base64.
+
+## Install
+
+```bash
+go build -o ~/.local/bin/kage ./cmd/kage
+kage doctor
+kage install            # Grok skill + MCP (`kage mcp`)
+kage install claude     # Claude equivalent
+```
+
+Needs `grim`, `hyprctl`, and `wtype` on PATH. Click needs `ydotool`; on Arch the user unit is `ydotool.service` (it runs `ydotoold`):
+
+```bash
+omarchy pkg add ydotool
+systemctl --user start ydotool.service
+```
+
+Input (`click`, `type`, `press`, `hotkey`) is gated. One of `--yes`, `KAGE_ALLOW_INPUT=1`, or `allow_input = true` in `~/.config/kage/config.toml`. Observe commands are not gated.
 
 ## Why not Omarchy's screenshot command
 
@@ -46,10 +60,6 @@ None of those click Firefox on this box. Kage is the Hyprland driver. Point Grok
 
 Cousin on macOS: [Peekaboo](https://github.com/openclaw/Peekaboo). Same loop, different compositor.
 
-## Status
-
-Documentation only. No binary yet.
-
 ## Docs
 
 | File | Contents |
@@ -58,4 +68,4 @@ Documentation only. No binary yet.
 | [docs/COMMANDS.md](docs/COMMANDS.md) | v1 command and JSON contracts |
 | [docs/CLIENTS.md](docs/CLIENTS.md) | MCP, skill, `kage install` (default Grok) |
 
-[AGENTS.md](AGENTS.md) is standing orders for implementing from this spec.
+[AGENTS.md](AGENTS.md) is standing orders for this tree.

@@ -9,7 +9,8 @@ import (
 const (
 	Denied       = "input not allowed; need --yes, KAGE_ALLOW_INPUT=1, or allow_input = true in config"
 	Hint         = "pass --yes, set KAGE_ALLOW_INPUT=1, or allow_input = true in config"
-	YdotoolHint  = "omarchy pkg add ydotool && systemctl --user start ydotoold"
+	// Arch/Omarchy ships ydotoold behind ydotool.service. There is no ydotoold.service.
+	YdotoolHint = "omarchy pkg add ydotool && systemctl --user start ydotool.service"
 	ClickNeedOne = "exactly one of --at X,Y or --on ID is required"
 )
 

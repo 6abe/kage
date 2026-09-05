@@ -7,7 +7,7 @@ The CLI is the product. MCP tools are 1:1 wrappers around CLI commands. No MCP-o
 Default stdout is JSON. `--human` is the only prose path. Errors are JSON on stderr and a non-zero exit:
 
 ```json
-{"ok":false,"error":"ydotool not running","hint":"omarchy pkg add ydotool && systemctl --user start ydotoold"}
+{"ok":false,"error":"ydotool not running","hint":"omarchy pkg add ydotool && systemctl --user start ydotool.service"}
 ```
 
 ## Why files, not base64
@@ -28,7 +28,7 @@ Call compositor tools. Do not reimplement Wayland screenshot protocols in v1.
 | Screenshot | `grim -o <monitor>` or `grim -g "x,y,w,h"` from client geometry |
 | Clipboard | `wl-copy` / `wl-paste` |
 | Keyboard to focused window | `wtype` |
-| Global pointer + keys | `ydotool` against `ydotoold` if present |
+| Global pointer + keys | `ydotool` against `ydotoold` if present. Arch unit is `ydotool.service` (`ExecStart=/usr/bin/ydotoold`). `systemctl --user start ydotoold` fails: no such unit. |
 | Window actions | `hyprctl dispatch focuswindow address:...` and friends |
 | AT-SPI widget tree | Optional after v1. Skip if the app has no tree |
 

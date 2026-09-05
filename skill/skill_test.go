@@ -27,6 +27,7 @@ func TestCanonicalSkill(t *testing.T) {
 		"scrot",
 		"see only",
 		"focused window",
+		"ydotool.service",
 	} {
 		if !strings.Contains(s, n) {
 			t.Errorf("missing %q", n)

@@ -34,6 +34,8 @@ Multi-monitor: see the monitor that has the focused window unless the user names
 
 Click, type, press, and hotkey are gated. If input is refused, ask the user to allow it (`allow_input` or `--yes`). Do not retry in a loop.
 
+If click fails with `ydotool not running`, start the Arch user unit: `systemctl --user start ydotool.service`. The daemon binary is `ydotoold`; the unit is not `ydotoold.service`.
+
 ## Commands
 
 - `kage doctor`

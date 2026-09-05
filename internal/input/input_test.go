@@ -2,8 +2,18 @@ package input
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestYdotoolHintUsesArchUnit(t *testing.T) {
+	if !strings.Contains(YdotoolHint, "ydotool.service") {
+		t.Fatalf("hint must name Arch unit ydotool.service: %s", YdotoolHint)
+	}
+	if strings.Contains(YdotoolHint, "start ydotoold") {
+		t.Fatalf("no ydotoold.service on Arch: %s", YdotoolHint)
+	}
+}
 
 func TestAllowed(t *testing.T) {
 	if Allowed(false, "", false) {

@@ -30,7 +30,7 @@ xdotool is not a Wayland fallback.
 2. `kage see` writes PNG + JSON. Run it on this machine.
 3. `--annotate` boxes + ids.
 4. `kage focus`, `type`, `press` via wtype. Gate with allow_input.
-5. `kage click --at` via ydotool if present; otherwise error with install hint.
+5. `kage click --at` via ydotool if present; otherwise error with install hint. Arch user unit is `ydotool.service` (daemon binary `ydotoold`). Not `ydotoold.service`.
 6. `kage mcp` stdio.
 7. `kage install` (default grok) writes skill + mcp config. Other clients via `kage install claude|cursor|codex`.
 8. Smoke: `kage see --annotate --path /tmp/kage-smoke.png` exists and is a PNG.
