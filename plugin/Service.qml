@@ -123,6 +123,40 @@ Item {
     root.hasMarks = true
   }
 
+  function burnMarks(strokes) {
+    if (!root.snapshot || !root.rawPath.length)
+      return
+    var w = root.snapshot.width || 0
+    var h = root.snapshot.height || 0
+    if (w <= 0 || h <= 0)
+      return
+    var list = strokes || []
+    var strokeW = Math.max(3, Math.round(w / 400))
+    var cmd = ["magick", root.rawPath, "-stroke", "#e23d28", "-strokewidth", String(strokeW), "-fill", "none"]
+    var drew = false
+    for (var s = 0; s < list.length; s++) {
+      var pts = list[s]
+      if (!pts || pts.length < 2)
+        continue
+      var parts = []
+      for (var i = 0; i < pts.length; i++) {
+        var x = Math.round(Number(pts[i].x) * w)
+        var y = Math.round(Number(pts[i].y) * h)
+        parts.push(x + "," + y)
+      }
+      cmd.push("-draw")
+      cmd.push("polyline " + parts.join(" "))
+      drew = true
+    }
+    if (!drew)
+      return
+    cmd.push(root.annotatedPath)
+    if (burnProc.running)
+      burnProc.running = false
+    burnProc.command = cmd
+    burnProc.running = true
+  }
+
   Process {
     id: ensureDirProc
     onExited: function(exitCode) {
@@ -223,6 +257,22 @@ Item {
 
   Process {
     id: rmWavProc
+  }
+
+  Process {
+    id: burnProc
+    stderr: StdioCollector {
+      id: burnErr
+      waitForEnd: true
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        var msg = String(burnErr.text || "").trim()
+        root.error = msg.length ? msg : ("magick burn failed (" + exitCode + ")")
+        return
+      }
+      root.markAnnotated()
+    }
   }
 
   FileView {

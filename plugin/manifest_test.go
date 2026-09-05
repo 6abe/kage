@@ -141,6 +141,12 @@ func TestA2Contracts(t *testing.T) {
 		"-f",
 		"/tmp/kage-",
 		"composerText",
+		"function burnMarks",
+		"magick",
+		"-draw",
+		"polyline",
+		"annotatedPath",
+		"id: burnProc",
 	} {
 		if !bytes.Contains(service, []byte(want)) {
 			t.Errorf("Service.qml missing %q", want)
@@ -162,15 +168,11 @@ func TestA2Contracts(t *testing.T) {
 		"stopMic",
 		"rawPath",
 		"Canvas.Image",
-		"burnCanvas",
 		"annotatedPath",
-		"markAnnotated",
+		"burnMarks",
 		"inkLocked",
 		"grabReady",
-		"burnSource",
-		"sourceSize",
 		"onTranscriptReady",
-		"pendingBurn",
 	} {
 		if !bytes.Contains(overlay, []byte(want)) {
 			t.Errorf("Overlay.qml missing %q", want)
@@ -273,7 +275,16 @@ func TestA2Contracts(t *testing.T) {
 		t.Error("startRecording must wait for transcribe before a new rec")
 	}
 	if bytes.Contains(overlay, []byte("drawImage(rawPreview")) {
-		t.Error("burn must not stretch the fitted preview; use burnSource at snapshot size")
+		t.Error("burn must not stretch the fitted preview; composite onto raw.png at snapshot size")
+	}
+	if bytes.Contains(overlay, []byte("Canvas.save")) || bytes.Contains(overlay, []byte(".save(")) {
+		t.Error("Overlay.qml must not use Canvas.save for annotated.png")
+	}
+	if bytes.Contains(overlay, []byte("id: burnCanvas")) || bytes.Contains(overlay, []byte("id: burnSource")) {
+		t.Error("hidden burn canvas/source must not be used")
+	}
+	if !bytes.Contains(service, []byte("root.rawPath")) || !bytes.Contains(service, []byte("root.annotatedPath")) {
+		t.Error("magick must write annotated.png from raw.png")
 	}
 }
 

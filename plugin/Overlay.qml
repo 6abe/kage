@@ -18,7 +18,6 @@ Item {
   property string loadError: ""
   property var strokes: []
   property var currentStroke: []
-  property bool pendingBurn: false
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
@@ -43,7 +42,7 @@ Item {
     return Util.fileUrl(root.service.rawPath) + "?v=" + String(root.service.imageToken || "")
   }
   readonly property bool recording: root.service && root.service.recording
-  readonly property bool grabReady: rawPreview.status === Image.Ready && burnSource.status === Image.Ready
+  readonly property bool grabReady: rawPreview.status === Image.Ready
   readonly property bool inkLocked: {
     if (!root.service)
       return true
@@ -140,19 +139,14 @@ Item {
   }
 
   function burnMarks() {
-    if (!root.service || !root.service.snapshot)
+    if (!root.service || typeof root.service.burnMarks !== "function")
       return
-    var snap = root.service.snapshot
-    var w = snap.width || 0
-    var h = snap.height || 0
-    if (w <= 0 || h <= 0)
+    if (!root.service.annotatedPath)
       return
-    root.pendingBurn = true
-    burnCanvas.width = w
-    burnCanvas.height = h
-    if (burnSource.status !== Image.Ready)
-      return
-    burnCanvas.requestPaint()
+    var all = root.strokes.slice()
+    if (root.currentStroke && root.currentStroke.length > 1)
+      all.push(root.currentStroke)
+    root.service.burnMarks(all)
   }
 
   Connections {
@@ -411,43 +405,6 @@ Item {
           }
         }
       }
-    }
-  }
-
-  Image {
-    id: burnSource
-    visible: false
-    asynchronous: true
-    cache: false
-    source: root.imageUrl
-    sourceSize.width: (root.service && root.service.snapshot && root.service.snapshot.width) ? root.service.snapshot.width : 0
-    sourceSize.height: (root.service && root.service.snapshot && root.service.snapshot.height) ? root.service.snapshot.height : 0
-    onStatusChanged: {
-      if (status === Image.Ready && root.pendingBurn)
-        burnCanvas.requestPaint()
-    }
-  }
-
-  Canvas {
-    id: burnCanvas
-    visible: false
-    width: 1
-    height: 1
-    renderTarget: Canvas.Image
-    renderStrategy: Canvas.Immediate
-    onPaint: {
-      if (!root.pendingBurn)
-        return
-      if (burnSource.status !== Image.Ready)
-        return
-      var ctx = getContext("2d")
-      ctx.clearRect(0, 0, width, height)
-      ctx.drawImage(burnSource, 0, 0, width, height)
-      root.paintStrokes(ctx, width, height)
-      var path = root.service ? root.service.annotatedPath : ""
-      root.pendingBurn = false
-      if (path.length && burnCanvas.save(path) && root.service)
-        root.service.markAnnotated()
     }
   }
 }
