@@ -15,6 +15,7 @@ Item {
 
   property bool opened: false
   property bool capturing: false
+  property bool quietRecapture: false
   property string loadError: ""
   property var strokes: []
   property var currentStroke: []
@@ -56,6 +57,8 @@ Item {
       return root.loadError
     if (root.service && root.service.error)
       return root.service.error
+    if (root.service && root.service.updatedCue)
+      return "updated"
     if (root.service && root.service.grabbing)
       return "Capturing…"
     if (root.service && root.service.transcribing)
@@ -90,9 +93,12 @@ Item {
       root.loadError = "kage.ask service is not loaded"
       root.capturing = false
       root.opened = true
+      root.quietRecapture = false
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
       return
     }
+    if (typeof root.service.parseFresh === "function" && root.service.parseFresh(payloadJson))
+      root.service.startFresh()
     root.service.grab(payloadJson)
   }
 
@@ -199,8 +205,14 @@ Item {
         return
       root.capturing = false
       root.opened = true
+      var skipMic = root.quietRecapture
+      root.quietRecapture = false
+      if (skipMic && root.service && root.service.updatedCue)
+        updatedTimer.restart()
       Qt.callLater(function() {
         keyCatcher.forceActiveFocus()
+        if (skipMic)
+          return
         if (root.service && !root.service.error && typeof root.service.startRecording === "function")
           root.service.startRecording()
       })
@@ -213,6 +225,20 @@ Item {
     }
     function onSendFinished() {
       composer.text = root.service.composerText
+    }
+    function onActRecaptureRequested() {
+      root.quietRecapture = true
+      root.beginCapture(root.recapturePayload())
+    }
+  }
+
+  Timer {
+    id: updatedTimer
+    interval: 1800
+    repeat: false
+    onTriggered: {
+      if (root.service)
+        root.service.updatedCue = false
     }
   }
 
@@ -312,6 +338,30 @@ Item {
               bordered: true
               enabled: !root.capturing && root.service && !root.service.grabbing
               onClicked: root.grab(root.recapturePayload())
+            }
+
+            Button {
+              objectName: "modeAsk"
+              text: "Ask"
+              foreground: root.foreground
+              accent: root.accent
+              bordered: !(root.service && root.service.mode === "ask")
+              onClicked: {
+                if (root.service && typeof root.service.setMode === "function")
+                  root.service.setMode("ask")
+              }
+            }
+
+            Button {
+              objectName: "modeDo"
+              text: "Do"
+              foreground: root.foreground
+              accent: root.accent
+              bordered: !(root.service && root.service.mode === "do")
+              onClicked: {
+                if (root.service && typeof root.service.setMode === "function")
+                  root.service.setMode("do")
+              }
             }
 
             Button {

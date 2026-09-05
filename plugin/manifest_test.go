@@ -1152,6 +1152,7 @@ func TestInstallNotes(t *testing.T) {
 		"omarchy plugin enable kage.ask",
 		"SUPER + SHIFT + A",
 		"SUPER + SHIFT + W",
+		"SUPER + SHIFT + N",
 		"omarchy-shell shell summon kage.ask",
 		"PRINT",
 	} {
@@ -1161,5 +1162,321 @@ func TestInstallNotes(t *testing.T) {
 	}
 	if bytes.Contains(readme, []byte("shell toggle kage.ask")) {
 		t.Error("README.md must not suggest toggle")
+	}
+}
+
+func TestA5Contracts(t *testing.T) {
+	dir := pluginDir(t)
+	service, err := os.ReadFile(filepath.Join(dir, "Service.qml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay, err := os.ReadFile(filepath.Join(dir, "Overlay.qml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme, err := os.ReadFile(filepath.Join(dir, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{
+		"function parseFresh(",
+		"function startFresh(",
+		"function beginFreshUuid(",
+		"function setMode(",
+		"function inputAllowed(",
+		"function parseAllowInput(",
+		"function isKageInputTool(",
+		"function maybeRecaptureAfterAct(",
+		"function noteToolEvent(",
+		"actRecaptureRequested",
+		"updatedCue",
+		`property string mode: "ask"`,
+		"KAGE_ALLOW_INPUT",
+		"allow_input",
+		"config.toml",
+		"--allow",
+		"uuidForFresh",
+		"pendingFresh",
+		"tool_call",
+		"completed",
+	} {
+		if !bytes.Contains(service, []byte(want)) {
+			t.Errorf("Service.qml missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"parseFresh",
+		"startFresh",
+		`objectName: "modeAsk"`,
+		`objectName: "modeDo"`,
+		`text: "Ask"`,
+		`text: "Do"`,
+		"setMode(\"ask\")",
+		"setMode(\"do\")",
+		"quietRecapture",
+		`"updated"`,
+		"onActRecaptureRequested",
+		"skipMic",
+	} {
+		if !bytes.Contains(overlay, []byte(want)) {
+			t.Errorf("Overlay.qml missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"SUPER + SHIFT + N",
+		`{"fresh":true,"capture":"monitor"}`,
+		"ask-session",
+		"Ask is the default",
+		"KAGE_ALLOW_INPUT=1",
+		"allow_input = true",
+		"updated",
+	} {
+		if !bytes.Contains(readme, []byte(want)) {
+			t.Errorf("README.md missing %q", want)
+		}
+	}
+
+	parseIdx := bytes.Index(service, []byte("function parseCapture("))
+	parseEnd := bytes.Index(service[parseIdx:], []byte("function focusedAddress("))
+	if parseIdx < 0 || parseEnd < 0 {
+		t.Fatal("parseCapture bounds")
+	}
+	parseBody := service[parseIdx : parseIdx+parseEnd]
+	if bytes.Contains(parseBody, []byte("fresh")) {
+		t.Error("parseCapture must stay capture-only; parseFresh is separate")
+	}
+
+	freshIdx := bytes.Index(service, []byte("function parseFresh("))
+	freshEnd := bytes.Index(service[freshIdx:], []byte("function parseAllowInput("))
+	if freshIdx < 0 || freshEnd < 0 {
+		t.Fatal("parseFresh bounds")
+	}
+	freshBody := service[freshIdx : freshIdx+freshEnd]
+	if !bytes.Contains(freshBody, []byte("obj.fresh === true")) {
+		t.Error("parseFresh must require fresh:true")
+	}
+	if !bytes.Contains(freshBody, []byte("payloadMaxChars")) {
+		t.Error("parseFresh must bound payload size")
+	}
+
+	startFreshIdx := bytes.Index(service, []byte("function startFresh("))
+	startFreshEnd := bytes.Index(service[startFreshIdx:], []byte("function beginFreshUuid("))
+	if startFreshIdx < 0 || startFreshEnd < 0 {
+		t.Fatal("startFresh bounds")
+	}
+	startFreshBody := service[startFreshIdx : startFreshIdx+startFreshEnd]
+	if !bytes.Contains(startFreshBody, []byte("chatMessages = []")) {
+		t.Error("fresh must start a new overlay thread")
+	}
+	if !bytes.Contains(startFreshBody, []byte("grabSeq = 0")) {
+		t.Error("fresh must reset grab numbering")
+	}
+	if !bytes.Contains(startFreshBody, []byte(`mode = "ask"`)) {
+		t.Error("new issue defaults to Ask")
+	}
+	if bytes.Contains(startFreshBody, []byte(`"rm"`)) || bytes.Contains(startFreshBody, []byte("RemoveAll")) {
+		t.Error("fresh must not delete the old session")
+	}
+	if !bytes.Contains(startFreshBody, []byte("pendingFresh")) {
+		t.Error("fresh must wait if grok is already running")
+	}
+	if !bytes.Contains(service, []byte("pendingActRecapture")) {
+		t.Error("Do recapture must queue if a grab is already running")
+	}
+
+	beginIdx := bytes.Index(service, []byte("function beginFreshUuid("))
+	beginEnd := bytes.Index(service[beginIdx:], []byte("function isKageInputTool("))
+	if beginIdx < 0 || beginEnd < 0 {
+		t.Fatal("beginFreshUuid bounds")
+	}
+	beginBody := service[beginIdx : beginIdx+beginEnd]
+	if !bytes.Contains(beginBody, []byte("uuidgen")) {
+		t.Error("fresh must uuidgen a new session id")
+	}
+	if !bytes.Contains(beginBody, []byte("uuidForFresh")) {
+		t.Error("fresh uuidgen must not share the send path")
+	}
+
+	uuidIdx := bytes.Index(service, []byte("id: uuidProc"))
+	if uuidIdx < 0 {
+		t.Fatal("missing uuidProc")
+	}
+	uuidTail := service[uuidIdx:]
+	if !bytes.Contains(uuidTail, []byte("uuidForFresh")) {
+		t.Error("uuidProc must persist a fresh session without starting grok")
+	}
+	freshPersist := bytes.Index(uuidTail, []byte("uuidForFresh"))
+	freshPersistEnd := bytes.Index(uuidTail[freshPersist:], []byte("uuidJobGen !== root.sendGen"))
+	if freshPersist < 0 || freshPersistEnd < 0 {
+		t.Fatal("fresh uuidProc bounds")
+	}
+	freshUuidBody := uuidTail[freshPersist : freshPersist+freshPersistEnd]
+	if !bytes.Contains(freshUuidBody, []byte("persistSessionId")) {
+		t.Error("fresh uuidgen must write ask-session")
+	}
+	if bytes.Contains(freshUuidBody, []byte("startGrokAfterPersist = true")) || bytes.Contains(freshUuidBody, []byte("startGrok(")) {
+		t.Error("fresh uuidgen must not start grok")
+	}
+
+	modeIdx := bytes.Index(service, []byte("function setMode("))
+	modeEnd := bytes.Index(service[modeIdx:], []byte("function startFresh("))
+	if modeIdx < 0 || modeEnd < 0 {
+		t.Fatal("setMode bounds")
+	}
+	modeBody := service[modeIdx : modeIdx+modeEnd]
+	if !bytes.Contains(modeBody, []byte("inputAllowed()")) {
+		t.Error("Do must check the kage input gate")
+	}
+	if !bytes.Contains(modeBody, []byte(`mode = "ask"`)) {
+		t.Error("missing gate must stay on Ask")
+	}
+	if !bytes.Contains(modeBody, []byte("input not allowed")) {
+		t.Error("missing gate must set a clear overlay error")
+	}
+	if bytes.Contains(modeBody, []byte("--yes")) || bytes.Contains(modeBody, []byte("KAGE_ALLOW_INPUT=1\"")) {
+		t.Error("setMode must not yolo --yes")
+	}
+
+	allowIdx := bytes.Index(service, []byte("function inputAllowed("))
+	allowEnd := bytes.Index(service[allowIdx:], []byte("function setMode("))
+	if allowIdx < 0 || allowEnd < 0 {
+		t.Fatal("inputAllowed bounds")
+	}
+	allowBody := service[allowIdx : allowIdx+allowEnd]
+	if !bytes.Contains(allowBody, []byte("KAGE_ALLOW_INPUT")) || !bytes.Contains(allowBody, []byte(`=== "1"`)) {
+		t.Error("inputAllowed must honor KAGE_ALLOW_INPUT=1")
+	}
+	if !bytes.Contains(allowBody, []byte("parseAllowInput")) {
+		t.Error("inputAllowed must read allow_input from config")
+	}
+
+	cfgIdx := bytes.Index(service, []byte("function parseAllowInput("))
+	cfgEnd := bytes.Index(service[cfgIdx:], []byte("function inputAllowed("))
+	if cfgIdx < 0 || cfgEnd < 0 {
+		t.Fatal("parseAllowInput bounds")
+	}
+	cfgBody := service[cfgIdx : cfgIdx+cfgEnd]
+	if !bytes.Contains(cfgBody, []byte(`charAt(0) === "#"`)) {
+		t.Error("parseAllowInput must ignore comments")
+	}
+	if !bytes.Contains(cfgBody, []byte(`v === "true"`)) || !bytes.Contains(cfgBody, []byte(`v === "1"`)) {
+		t.Error("parseAllowInput must accept true and 1")
+	}
+
+	startIdx := bytes.Index(service, []byte("function startGrok("))
+	startEnd := bytes.Index(service[startIdx:], []byte("function handleStreamLine("))
+	if startIdx < 0 || startEnd < 0 {
+		t.Fatal("startGrok bounds")
+	}
+	startBody := service[startIdx : startIdx+startEnd]
+	if !bytes.Contains(startBody, []byte("doInput")) {
+		t.Error("startGrok must branch Ask vs Do")
+	}
+	denyIdx := bytes.Index(startBody, []byte("} else {"))
+	if denyIdx < 0 {
+		t.Fatal("startGrok missing Ask else")
+	}
+	askBody := startBody[denyIdx:]
+	if !bytes.Contains(askBody, []byte("--deny")) || !bytes.Contains(askBody, []byte("names[i]")) {
+		t.Error("Ask must still deny kage click/type/press/hotkey")
+	}
+	if bytes.Contains(askBody, []byte("--allow")) {
+		t.Error("Ask else branch must not --allow input tools")
+	}
+	doBody := startBody[:denyIdx]
+	if !bytes.Contains(doBody, []byte("--allow")) || !bytes.Contains(doBody, []byte("kage click")) {
+		t.Error("Do must --allow kage input tools when the gate is open")
+	}
+	if bytes.Contains(startBody, []byte("bypassPermissions")) || bytes.Contains(startBody, []byte("--always-approve")) || bytes.Contains(startBody, []byte("--yolo")) || bytes.Contains(startBody, []byte("--yes")) {
+		t.Error("Do must not yolo desktop input")
+	}
+	if !bytes.Contains(startBody, []byte("inputAllowed()")) {
+		t.Error("Do send must re-check the gate")
+	}
+
+	recapIdx := bytes.Index(service, []byte("function maybeRecaptureAfterAct("))
+	recapEnd := bytes.Index(service[recapIdx:], []byte("Process {"))
+	if recapIdx < 0 || recapEnd < 0 {
+		t.Fatal("maybeRecaptureAfterAct bounds")
+	}
+	recapBody := service[recapIdx : recapIdx+recapEnd]
+	if !bytes.Contains(recapBody, []byte(`mode !== "do"`)) {
+		t.Error("recapture-after-act is Do only")
+	}
+	if !bytes.Contains(recapBody, []byte("updatedCue = true")) {
+		t.Error("successful Do input must set the updated cue")
+	}
+	if !bytes.Contains(recapBody, []byte("actRecaptureRequested")) {
+		t.Error("successful Do input must recapture through the overlay")
+	}
+
+	toolIdx := bytes.Index(service, []byte("function isKageInputTool("))
+	toolEnd := bytes.Index(service[toolIdx:], []byte("function dropInputId("))
+	if toolIdx < 0 || toolEnd < 0 {
+		t.Fatal("isKageInputTool bounds")
+	}
+	toolBody := service[toolIdx : toolIdx+toolEnd]
+	if !bytes.Contains(toolBody, []byte("kage click")) || !bytes.Contains(toolBody, []byte("kage_click")) {
+		t.Error("must detect kage click/type/press/hotkey tools")
+	}
+	if !bytes.Contains(toolBody, []byte("kage see")) || !bytes.Contains(toolBody, []byte("return false")) {
+		t.Error("kage see must not count as an input tool")
+	}
+
+	noteIdx := bytes.Index(service, []byte("function noteToolEvent("))
+	noteEnd := bytes.Index(service[noteIdx:], []byte("function maybeRecaptureAfterAct("))
+	if noteIdx < 0 || noteEnd < 0 {
+		t.Fatal("noteToolEvent bounds")
+	}
+	noteBody := service[noteIdx : noteIdx+noteEnd]
+	if !bytes.Contains(noteBody, []byte(`st === "completed"`)) {
+		t.Error("recapture only after a successful tool")
+	}
+	if !bytes.Contains(noteBody, []byte("failed")) {
+		t.Error("failed input tools must not recapture")
+	}
+
+	grabIdx := bytes.Index(service, []byte("function grab("))
+	grabEnd := bytes.Index(service[grabIdx:], []byte("function startRecording()"))
+	if grabIdx < 0 || grabEnd < 0 {
+		t.Fatal("grab bounds")
+	}
+	grabBody := service[grabIdx : grabIdx+grabEnd]
+	if bytes.Contains(grabBody, []byte("startFresh")) || bytes.Contains(grabBody, []byte("sessionId")) {
+		t.Error("grab must stay recapture-only; Overlay calls startFresh")
+	}
+
+	beginCap := bytes.Index(overlay, []byte("function beginCapture("))
+	beginCapEnd := bytes.Index(overlay[beginCap:], []byte("function open("))
+	if beginCap < 0 || beginCapEnd < 0 {
+		t.Fatal("beginCapture bounds")
+	}
+	beginCapBody := overlay[beginCap : beginCap+beginCapEnd]
+	if !bytes.Contains(beginCapBody, []byte("parseFresh")) || !bytes.Contains(beginCapBody, []byte("startFresh")) {
+		t.Error("summon with fresh:true must start a new session before grab")
+	}
+
+	finIdx := bytes.Index(overlay, []byte("function onGrabFinished()"))
+	finEnd := bytes.Index(overlay[finIdx:], []byte("function onTranscriptReady"))
+	if finIdx < 0 || finEnd < 0 {
+		t.Fatal("onGrabFinished bounds")
+	}
+	finBody := overlay[finIdx : finIdx+finEnd]
+	if !bytes.Contains(finBody, []byte("skipMic")) {
+		t.Error("Do recapture-after-act must not auto-start the mic")
+	}
+	if !bytes.Contains(finBody, []byte("startRecording")) {
+		t.Error("user recapture must still start the mic")
+	}
+
+	for _, banned := range []string{"--always-approve", "--yolo", "bypassPermissions", "kage agent", "bar-widget", "this project"} {
+		if bytes.Contains(service, []byte(banned)) || bytes.Contains(overlay, []byte(banned)) {
+			t.Errorf("plugin contains banned %q", banned)
+		}
+	}
+	if bytes.Contains(service, []byte(`"--yes"`)) {
+		t.Error("plugin must not pass --yes to bypass the input gate")
 	}
 }

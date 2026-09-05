@@ -74,13 +74,25 @@ Item {
   property bool sendQueued: false
   property bool startGrokAfterPersist: false
   property int persistJobGen: 0
+  property int persistGen: 0
   property int uuidJobGen: 0
   property bool pendingGrab: false
+  property bool pendingActRecapture: false
+  property string mode: "ask"
+  property string configText: ""
+  property int freshGen: 0
+  property bool uuidForFresh: false
+  property bool pendingFresh: false
+  property string pendingInputIds: ""
+  property bool updatedCue: false
+
+  readonly property string configFilePath: configDir + "/config.toml"
 
   signal grabFinished()
   signal transcriptReady(string text)
   signal chatUpdated()
   signal sendFinished()
+  signal actRecaptureRequested()
 
   function parseCapture(payloadJson) {
     var raw = String(payloadJson || "")
@@ -162,6 +174,16 @@ Item {
   function captureDone() {
     if (root.pendingGrab) {
       root.pendingGrab = false
+      root.error = ""
+      root.hasMarks = false
+      root.pendingStrokes = null
+      root.burnGen += 1
+      root.startGrabPipeline()
+      return
+    }
+    if (root.pendingActRecapture && root.mode === "do") {
+      root.pendingActRecapture = false
+      root.updatedCue = true
       root.error = ""
       root.hasMarks = false
       root.pendingStrokes = null
@@ -310,7 +332,8 @@ Item {
     if (!root.isUuid(id))
       return
     root.sessionId = id
-    root.persistJobGen = root.sendGen
+    root.persistGen += 1
+    root.persistJobGen = root.persistGen
     if (writeSessionProc.running)
       writeSessionProc.running = false
     writeSessionProc.command = [
@@ -405,26 +428,51 @@ Item {
   }
 
   function startGrok(id, resume) {
+    var doInput = root.mode === "do" && root.inputAllowed()
+    if (root.mode === "do" && !doInput) {
+      abortSend("input not allowed; need KAGE_ALLOW_INPUT=1 or allow_input = true in config")
+      return
+    }
     var cmd = [
       "grok",
       "--prompt-json", root.pendingPromptJson,
       "--output-format", "streaming-json",
       "--cwd", root.homeDir,
-      "--permission-mode", "dontAsk",
-      "--deny", "kage click",
-      "--deny", "kage type",
-      "--deny", "kage press",
-      "--deny", "kage hotkey",
-      "--deny", "mcp__kage__kage_click",
-      "--deny", "mcp__kage__kage_type",
-      "--deny", "mcp__kage__kage_press",
-      "--deny", "mcp__kage__kage_hotkey",
-      "--deny", "Bash(kage click*)",
-      "--deny", "Bash(kage type*)",
-      "--deny", "Bash(kage press*)",
-      "--deny", "Bash(kage hotkey*)",
-      "--disallowed-tools", "kage__kage_click,kage__kage_type,kage__kage_press,kage__kage_hotkey"
+      "--permission-mode", "dontAsk"
     ]
+    var names = ["kage click", "kage type", "kage press", "kage hotkey"]
+    var mcp = ["mcp__kage__kage_click", "mcp__kage__kage_type", "mcp__kage__kage_press", "mcp__kage__kage_hotkey"]
+    var bash = ["Bash(kage click*)", "Bash(kage type*)", "Bash(kage press*)", "Bash(kage hotkey*)"]
+    var i
+    if (doInput) {
+      for (i = 0; i < names.length; i++) {
+        cmd.push("--allow")
+        cmd.push(names[i])
+      }
+      for (i = 0; i < mcp.length; i++) {
+        cmd.push("--allow")
+        cmd.push(mcp[i])
+      }
+      for (i = 0; i < bash.length; i++) {
+        cmd.push("--allow")
+        cmd.push(bash[i])
+      }
+    } else {
+      for (i = 0; i < names.length; i++) {
+        cmd.push("--deny")
+        cmd.push(names[i])
+      }
+      for (i = 0; i < mcp.length; i++) {
+        cmd.push("--deny")
+        cmd.push(mcp[i])
+      }
+      for (i = 0; i < bash.length; i++) {
+        cmd.push("--deny")
+        cmd.push(bash[i])
+      }
+      cmd.push("--disallowed-tools")
+      cmd.push("kage__kage_click,kage__kage_type,kage__kage_press,kage__kage_hotkey")
+    }
     if (resume) {
       cmd.push("--resume")
       cmd.push(id)
@@ -450,12 +498,16 @@ Item {
     }
     if (!obj || typeof obj !== "object")
       return
+    var upd = root.streamUpdate(obj)
+    root.noteToolEvent(upd)
     if (obj.type === "text" && obj.data != null)
       root.streamBuf += String(obj.data)
     else if (obj.type === "assistant" && obj.text)
       root.streamBuf += String(obj.text)
     else if (obj.delta && obj.delta.text)
       root.streamBuf += String(obj.delta.text)
+    else if (upd && upd.sessionUpdate === "agent_message_chunk" && upd.content && upd.content.text)
+      root.streamBuf += String(upd.content.text)
     if (root.streamBuf.length)
       setLastAssistant(root.streamBuf)
   }
@@ -508,6 +560,162 @@ Item {
     root.pendingStrokes = null
     if (pending)
       startBurn(pending)
+  }
+
+  function parseFresh(payloadJson) {
+    var raw = String(payloadJson || "")
+    if (raw.length > root.payloadMaxChars)
+      raw = raw.substring(0, root.payloadMaxChars)
+    raw = raw.trim()
+    if (!raw.length)
+      return false
+    var obj = null
+    try {
+      obj = JSON.parse(raw)
+    } catch (e) {
+      return false
+    }
+    if (!obj || typeof obj !== "object")
+      return false
+    return obj.fresh === true
+  }
+
+  function parseAllowInput(text) {
+    var lines = String(text || "").split("\n")
+    var allow = false
+    for (var i = 0; i < lines.length; i++) {
+      var line = String(lines[i] || "").trim()
+      if (!line.length || line.charAt(0) === "#")
+        continue
+      var eq = line.indexOf("=")
+      if (eq < 0)
+        continue
+      var key = line.substring(0, eq).trim()
+      if (key !== "allow_input")
+        continue
+      var v = line.substring(eq + 1).trim()
+      if (v.length >= 2) {
+        var q = v.charAt(0)
+        if ((q === "\"" || q === "'") && v.charAt(v.length - 1) === q)
+          v = v.substring(1, v.length - 1)
+      }
+      allow = v === "true" || v === "1"
+    }
+    return allow
+  }
+
+  function inputAllowed() {
+    if (Quickshell.env("KAGE_ALLOW_INPUT") === "1")
+      return true
+    return root.parseAllowInput(root.configText)
+  }
+
+  function setMode(next) {
+    var want = String(next || "") === "do" ? "do" : "ask"
+    if (want === "do" && !root.inputAllowed()) {
+      root.error = "input not allowed; need KAGE_ALLOW_INPUT=1 or allow_input = true in config"
+      root.mode = "ask"
+      return
+    }
+    root.error = ""
+    root.mode = want
+  }
+
+  function startFresh() {
+    abortQueuedSend()
+    root.chatMessages = []
+    root.chatUpdated()
+    root.grabSeq = 0
+    root.mode = "ask"
+    root.pendingInputIds = ""
+    root.updatedCue = false
+    if (root.sending || grokProc.running || uuidProc.running) {
+      root.pendingFresh = true
+      return
+    }
+    beginFreshUuid()
+  }
+
+  function beginFreshUuid() {
+    root.pendingFresh = false
+    root.freshGen += 1
+    root.uuidForFresh = true
+    root.uuidJobGen = root.freshGen
+    uuidProc.command = ["uuidgen"]
+    uuidProc.running = true
+  }
+
+  function isKageInputTool(upd) {
+    var parts = []
+    parts.push(String(upd && upd.title || ""))
+    var meta = upd && upd._meta && upd._meta["x.ai/tool"]
+    if (meta && meta.name)
+      parts.push(String(meta.name))
+    var rawIn = upd && upd.rawInput
+    if (rawIn) {
+      parts.push(String(rawIn.command || ""))
+      parts.push(String(rawIn.tool || ""))
+    }
+    var s = parts.join(" ").toLowerCase()
+    if (s.indexOf("kage_see") >= 0 || s.indexOf("kage see") >= 0)
+      return false
+    return s.indexOf("kage click") >= 0 || s.indexOf("kage_click") >= 0
+      || s.indexOf("kage type") >= 0 || s.indexOf("kage_type") >= 0
+      || s.indexOf("kage press") >= 0 || s.indexOf("kage_press") >= 0
+      || s.indexOf("kage hotkey") >= 0 || s.indexOf("kage_hotkey") >= 0
+  }
+
+  function dropInputId(id) {
+    var want = String(id || "")
+    if (!want.length)
+      return
+    var cur = " " + String(root.pendingInputIds || "").trim() + " "
+    var next = cur.split(" " + want + " ").join(" ")
+    root.pendingInputIds = next.replace(/ +/g, " ").trim()
+  }
+
+  function streamUpdate(obj) {
+    if (!obj || typeof obj !== "object")
+      return obj
+    if (obj.params && obj.params.update && typeof obj.params.update === "object")
+      return obj.params.update
+    if (obj.update && typeof obj.update === "object" && obj.update.sessionUpdate)
+      return obj.update
+    return obj
+  }
+
+  function noteToolEvent(upd) {
+    if (!upd || typeof upd !== "object")
+      return
+    var kind = String(upd.sessionUpdate || upd.type || "")
+    var id = String(upd.toolCallId || "")
+    if (!id.length)
+      return
+    if (kind === "tool_call" || kind === "tool_call_update") {
+      var cur = " " + String(root.pendingInputIds || "").trim() + " "
+      if (root.isKageInputTool(upd) && cur.indexOf(" " + id + " ") < 0)
+        root.pendingInputIds = (String(root.pendingInputIds || "").trim() + " " + id).trim()
+    }
+    var st = String(upd.status || "").toLowerCase()
+    if (st === "completed")
+      root.maybeRecaptureAfterAct(id)
+    else if (st === "failed" || st === "cancelled")
+      root.dropInputId(id)
+  }
+
+  function maybeRecaptureAfterAct(id) {
+    var cur = " " + String(root.pendingInputIds || "").trim() + " "
+    if (cur.indexOf(" " + id + " ") < 0)
+      return
+    root.dropInputId(id)
+    if (root.mode !== "do")
+      return
+    if (root.grabbing) {
+      root.pendingActRecapture = true
+      return
+    }
+    root.updatedCue = true
+    root.actRecaptureRequested()
   }
 
   Process {
@@ -746,7 +954,7 @@ Item {
   Process {
     id: writeSessionProc
     onExited: function(exitCode) {
-      if (root.persistJobGen !== root.sendGen)
+      if (root.persistJobGen !== root.persistGen)
         return
       if (exitCode !== 0) {
         if (root.startGrokAfterPersist)
@@ -769,6 +977,23 @@ Item {
       waitForEnd: true
     }
     onExited: function(exitCode) {
+      if (root.uuidForFresh) {
+        if (root.uuidJobGen !== root.freshGen)
+          return
+        root.uuidForFresh = false
+        if (exitCode !== 0) {
+          root.sending = false
+          root.error = "uuidgen failed"
+          return
+        }
+        var freshId = String(uuidOut.text || "").trim()
+        if (!root.isUuid(freshId)) {
+          root.error = "uuidgen returned invalid id"
+          return
+        }
+        persistSessionId(freshId)
+        return
+      }
       if (root.uuidJobGen !== root.sendGen)
         return
       if (exitCode !== 0) {
@@ -825,11 +1050,28 @@ Item {
         ]
         writeGrokErrProc.running = true
       }
-      if (exitCode !== 0 && !root.streamBuf.length)
+      if (root.pendingFresh) {
+        root.streamBuf = ""
+      } else if (exitCode !== 0 && !root.streamBuf.length) {
         root.error = "grok failed (" + exitCode + ")"
-      else if (root.streamBuf.length)
+      } else if (root.streamBuf.length) {
         setLastAssistant(root.streamBuf)
+      }
       root.sendFinished()
+      if (root.pendingFresh && !uuidProc.running)
+        beginFreshUuid()
     }
+  }
+
+  FileView {
+    id: configFile
+    path: root.configFilePath
+    printErrors: false
+    watchChanges: true
+    onLoaded: function() {
+      root.configText = String(text() || "")
+    }
+    onFileChanged: reload()
+    Component.onCompleted: reload()
   }
 }
