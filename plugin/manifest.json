@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "kage.ask",
+  "name": "Kage ask",
+  "version": "0.1.0",
+  "author": "kage",
+  "license": "MIT",
+  "description": "Circle something on screen and talk to Grok about it",
+  "kinds": ["service", "overlay"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "overlay": "Overlay.qml"
+  }
+}
