@@ -134,6 +134,12 @@ func TestA2Contracts(t *testing.T) {
 		"function cancelRecording",
 		"function stopMic",
 		"function stopAndTranscribe",
+		"function beginTranscribe",
+		"transcribeWhenRecEnds",
+		"unlinkWav",
+		`"rm"`,
+		"-f",
+		"/tmp/kage-",
 		"composerText",
 	} {
 		if !bytes.Contains(service, []byte(want)) {
@@ -143,6 +149,9 @@ func TestA2Contracts(t *testing.T) {
 	if bytes.Contains(service, []byte("record start")) || bytes.Contains(service, []byte(`"record"`)) {
 		t.Error("Service.qml must not use voxtype record (type-mode injection)")
 	}
+	if bytes.Contains(service, []byte(`return "/tmp"`)) || bytes.Contains(service, []byte(`"/tmp/kage/ask"`)) {
+		t.Error("Service.qml must not fall back to shared /tmp/kage")
+	}
 	for _, want := range []string{
 		"TextArea",
 		"objectName: \"composer\"",
@@ -151,13 +160,26 @@ func TestA2Contracts(t *testing.T) {
 		"stopAndTranscribe",
 		"startRecording",
 		"stopMic",
-		"grabToImage",
+		"rawPath",
+		"Canvas.Image",
+		"burnCanvas",
 		"annotatedPath",
 		"markAnnotated",
+		"inkLocked",
+		"onTranscriptReady",
 	} {
 		if !bytes.Contains(overlay, []byte(want)) {
 			t.Errorf("Overlay.qml missing %q", want)
 		}
+	}
+	if bytes.Contains(overlay, []byte("text: root.service.composerText")) || bytes.Contains(overlay, []byte("text: root.service ? root.service.composerText")) {
+		t.Error("composer must not two-way bind text to composerText")
+	}
+	if bytes.Contains(overlay, []byte("Canvas.FramebufferObject")) {
+		t.Error("Overlay.qml must not use FBO canvas for ink")
+	}
+	if bytes.Contains(overlay, []byte("&& root.statusText.length === 0")) {
+		t.Error("grab Image must stay visible while statusText is set")
 	}
 	for name, body := range map[string][]byte{"Service.qml": service, "Overlay.qml": overlay} {
 		for _, banned := range [][]byte{
@@ -175,6 +197,61 @@ func TestA2Contracts(t *testing.T) {
 	}
 	if !bytes.Contains(overlay, []byte("!root.service.error")) {
 		t.Error("Overlay.qml must skip startRecording when grab failed")
+	}
+
+	cancelIdx := bytes.Index(service, []byte("function cancelRecording()"))
+	beginIdx := bytes.Index(service, []byte("function beginTranscribe()"))
+	if cancelIdx < 0 || beginIdx < 0 {
+		t.Fatal("missing cancelRecording or beginTranscribe")
+	}
+	cancelEnd := bytes.Index(service[cancelIdx:], []byte("function stopMic()"))
+	if cancelEnd < 0 {
+		t.Fatal("cancelRecording not followed by stopMic")
+	}
+	cancelBody := service[cancelIdx : cancelIdx+cancelEnd]
+	if !bytes.Contains(cancelBody, []byte("transcribeWhenRecEnds = false")) {
+		t.Error("cancelRecording must clear transcribeWhenRecEnds")
+	}
+	if bytes.Contains(cancelBody, []byte("beginTranscribe")) || bytes.Contains(cancelBody, []byte("transcribeProc.running = true")) {
+		t.Error("cancelRecording must not start transcribe")
+	}
+
+	stopIdx := bytes.Index(service, []byte("function stopAndTranscribe()"))
+	stopEnd := bytes.Index(service[stopIdx:], []byte("function beginTranscribe()"))
+	if stopIdx < 0 || stopEnd < 0 {
+		t.Fatal("stopAndTranscribe body bounds")
+	}
+	stopBody := service[stopIdx : stopIdx+stopEnd]
+	if bytes.Contains(stopBody, []byte("transcribeProc.running = true")) {
+		t.Error("stopAndTranscribe must wait for recProc onExited before transcribe")
+	}
+	if !bytes.Contains(stopBody, []byte("transcribeWhenRecEnds = true")) {
+		t.Error("stopAndTranscribe must set transcribeWhenRecEnds")
+	}
+
+	recExited := bytes.Index(service, []byte("id: recProc"))
+	if recExited < 0 {
+		t.Fatal("missing recProc")
+	}
+	recTail := service[recExited:]
+	if !bytes.Contains(recTail, []byte("if (root.transcribeWhenRecEnds)")) {
+		t.Error("recProc onExited must gate transcribe on transcribeWhenRecEnds")
+	}
+	if !bytes.Contains(recTail, []byte("unlinkWav()")) {
+		t.Error("recProc onExited must unlink wav when not transcribing")
+	}
+
+	transExited := bytes.Index(service, []byte("id: transcribeProc"))
+	if transExited < 0 {
+		t.Fatal("missing transcribeProc")
+	}
+	transBody := service[transExited:]
+	failBranch := bytes.Index(transBody, []byte("exitCode !== 0"))
+	if failBranch < 0 {
+		t.Fatal("transcribeProc missing error path")
+	}
+	if !bytes.Contains(transBody, []byte("unlinkWav()")) {
+		t.Error("transcribeProc must unlink wav including on failure")
 	}
 }
 

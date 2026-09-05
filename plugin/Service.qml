@@ -9,13 +9,18 @@ Item {
   property var manifest: null
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
 
-  readonly property string runtimeDir: {
+  readonly property string kageDir: {
     var dir = Quickshell.env("XDG_RUNTIME_DIR")
     if (dir && dir.length)
-      return dir
-    return "/tmp"
+      return dir + "/kage"
+    var uid = Quickshell.env("UID")
+    if (!uid || !uid.length)
+      uid = Quickshell.env("EUID")
+    if (!uid || !uid.length)
+      uid = "0"
+    return "/tmp/kage-" + uid
   }
-  readonly property string askRoot: runtimeDir + "/kage/ask"
+  readonly property string askRoot: kageDir + "/ask"
   property string issueId: "current"
   readonly property string issueDir: askRoot + "/" + issueId
   readonly property string rawPath: issueDir + "/raw.png"
@@ -26,6 +31,7 @@ Item {
   property bool grabbing: false
   property bool recording: false
   property bool transcribing: false
+  property bool transcribeWhenRecEnds: false
   property bool hasMarks: false
   property string imagePath: ""
   property string imageToken: ""
@@ -45,7 +51,7 @@ Item {
       ensureDirProc.running = false
     if (seeProc.running)
       seeProc.running = false
-    ensureDirProc.command = ["install", "-d", "-m", "0700", root.askRoot, root.issueDir]
+    ensureDirProc.command = ["install", "-d", "-m", "0700", root.kageDir, root.askRoot, root.issueDir]
     ensureDirProc.running = true
   }
 
@@ -55,18 +61,29 @@ Item {
     if (transcribeProc.running)
       transcribeProc.running = false
     root.transcribing = false
+    root.transcribeWhenRecEnds = false
     recProc.command = ["pw-record", "--rate", "16000", "--channels", "1", "--format", "s16", root.wavPath]
     recProc.running = true
     root.recording = true
   }
 
+  function unlinkWav() {
+    if (rmWavProc.running)
+      rmWavProc.running = false
+    rmWavProc.command = ["rm", "-f", root.wavPath]
+    rmWavProc.running = true
+  }
+
   function cancelRecording() {
-    if (recProc.running)
-      recProc.running = false
+    root.transcribeWhenRecEnds = false
     root.recording = false
     root.transcribing = false
     if (transcribeProc.running)
       transcribeProc.running = false
+    if (recProc.running)
+      recProc.running = false
+    else
+      unlinkWav()
   }
 
   function stopMic() {
@@ -74,11 +91,21 @@ Item {
   }
 
   function stopAndTranscribe() {
-    if (!root.recording && !recProc.running)
+    if (!root.recording && !recProc.running) {
+      if (!root.transcribing)
+        unlinkWav()
       return
+    }
     root.recording = false
+    root.transcribeWhenRecEnds = true
     if (recProc.running)
       recProc.running = false
+    else
+      beginTranscribe()
+  }
+
+  function beginTranscribe() {
+    root.transcribeWhenRecEnds = false
     root.transcribing = true
     transcribeProc.command = ["voxtype", "transcribe", root.wavPath]
     transcribeProc.running = true
@@ -86,8 +113,6 @@ Item {
 
   function markAnnotated() {
     root.hasMarks = true
-    root.imagePath = root.annotatedPath
-    root.imageToken = Date.now().toString()
   }
 
   Process {
@@ -145,6 +170,11 @@ Item {
     id: recProc
     onExited: function() {
       root.recording = false
+      if (root.transcribeWhenRecEnds) {
+        beginTranscribe()
+        return
+      }
+      unlinkWav()
     }
   }
 
@@ -160,6 +190,7 @@ Item {
     }
     onExited: function(exitCode) {
       root.transcribing = false
+      unlinkWav()
       if (exitCode !== 0) {
         var msg = String(transcribeErr.text || transcribeOut.text || "").trim()
         root.error = msg.length ? msg : ("voxtype transcribe failed (" + exitCode + ")")
@@ -174,6 +205,10 @@ Item {
         root.transcriptReady(text)
       }
     }
+  }
+
+  Process {
+    id: rmWavProc
   }
 
   FileView {
