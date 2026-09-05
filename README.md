@@ -1,5 +1,7 @@
 # Kage
 
+![Kage](assets/kage.jpg)
+
 A Peekaboo-style desktop observer for **Omarchy Linux** (Arch + Hyprland + Wayland). Any coding agent that can run a CLI or speak MCP can drive it. Default install target is **Grok Build** (`grok`).
 
 Kage is Japanese for shadow. The binary is `kage`. Observe first. Act only when allowed.
