@@ -103,3 +103,7 @@ v1 "element id" is the annotated **window** id from the last see snapshot, not a
 - Screen recording (Omarchy already has `omarchy screenrecord`)
 - Perfect accessibility trees
 - Homebrew, npm wrapper, Mac notarization
+
+## After v1
+
+The human "circle this and talk" UI is an Omarchy Quickshell plugin (`kage.ask`), not a window inside the kage binary and not `kage agent`. Spec: [ASK.md](ASK.md).

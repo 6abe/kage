@@ -8,4 +8,5 @@ Spec for a tool that is not built yet. If code and these files disagree later, t
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Layout, stack, safety, non-goals |
 | [COMMANDS.md](COMMANDS.md) | Flags and JSON for v1 |
 | [CLIENTS.md](CLIENTS.md) | MCP + skill install; default client is Grok |
+| [ASK.md](ASK.md) | Post-v1 Omarchy Quickshell plugin: overlay conversation |
 | [../AGENTS.md](../AGENTS.md) | How to implement from this spec |

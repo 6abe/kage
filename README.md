@@ -67,5 +67,6 @@ Cousin on macOS: [Peekaboo](https://github.com/openclaw/Peekaboo). Same loop, di
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | CLI-first shape, stack, paths, safety |
 | [docs/COMMANDS.md](docs/COMMANDS.md) | v1 command and JSON contracts |
 | [docs/CLIENTS.md](docs/CLIENTS.md) | MCP, skill, `kage install` (default Grok) |
+| [docs/ASK.md](docs/ASK.md) | Post-v1 Quickshell overlay: circle the screen and talk to Grok |
 
 [AGENTS.md](AGENTS.md) is standing orders for this tree.

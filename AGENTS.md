@@ -9,6 +9,7 @@ Read [README.md](README.md), then the doc that matches the work:
 - Shape, stack, safety, non-goals → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Flags and JSON → [docs/COMMANDS.md](docs/COMMANDS.md)
 - MCP and client install → [docs/CLIENTS.md](docs/CLIENTS.md)
+- Post-v1 Quickshell overlay → [docs/ASK.md](docs/ASK.md)
 
 Probe this machine before inventing paths: `hyprctl -j monitors`, `which grim wtype ydotool`, `echo $HYPRLAND_INSTANCE_SIGNATURE`.
 
@@ -23,6 +24,8 @@ No `slurp`. No `omarchy screenshot`. Capture with grim and hyprctl geometry.
 Input is gated. Observe is not.
 
 xdotool is not a Wayland fallback.
+
+Do not add a GUI to the kage binary. The ask overlay is an Omarchy Quickshell plugin (`kage.ask`). See [docs/ASK.md](docs/ASK.md).
 
 ## Implement in this order
 
