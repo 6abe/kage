@@ -113,6 +113,37 @@ Item {
     return root.service.captureMode || "ok"
   }
 
+  function setMode(payloadJson) {
+    if (!root.bindService())
+      return JSON.stringify({ mode: "ask", error: "kage.ask service is not loaded", inputAllowed: false })
+    var want = "ask"
+    var raw = String(payloadJson || "")
+    var max = root.service && root.service.payloadMaxChars ? root.service.payloadMaxChars : 4096
+    if (raw.length > max)
+      raw = raw.substring(0, max)
+    raw = raw.trim()
+    if (raw === "do" || raw === "ask")
+      want = raw
+    else if (raw.length) {
+      try {
+        var obj = JSON.parse(raw)
+        if (typeof obj === "string")
+          want = obj
+        else if (obj && typeof obj === "object" && obj.mode != null)
+          want = String(obj.mode)
+      } catch (e) {
+        want = "ask"
+      }
+    }
+    if (typeof root.service.setMode === "function")
+      root.service.setMode(want)
+    return JSON.stringify({
+      mode: String(root.service.mode || "ask"),
+      error: String(root.service.error || ""),
+      inputAllowed: !!(typeof root.service.inputAllowed === "function" && root.service.inputAllowed())
+    })
+  }
+
   function close() {
     if (root.service && typeof root.service.abortQueuedSend === "function")
       root.service.abortQueuedSend()

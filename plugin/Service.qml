@@ -30,6 +30,7 @@ Item {
   readonly property string annotatedTmpPath: issueDir + "/annotated" + grabTag + ".png.tmp"
   readonly property string snapshotJsonPath: issueDir + "/snapshot" + grabTag + ".json"
   readonly property string promptTxtPath: issueDir + "/prompt.txt"
+  readonly property string statusJsonPath: issueDir + "/status.json"
   readonly property string grokErrPath: issueDir + "/grok.err"
   readonly property string wavPath: issueDir + "/rec.wav"
   readonly property int composerMaxChars: 32000
@@ -78,6 +79,7 @@ Item {
   property int uuidJobGen: 0
   property bool pendingGrab: false
   property bool pendingActRecapture: false
+  property string pendingStatusText: ""
   property string mode: "ask"
   property string configText: ""
   property int freshGen: 0
@@ -615,10 +617,24 @@ Item {
     if (want === "do" && !root.inputAllowed()) {
       root.error = "input not allowed; need KAGE_ALLOW_INPUT=1 or allow_input = true in config"
       root.mode = "ask"
+      writeModeStatus()
       return
     }
     root.error = ""
     root.mode = want
+    writeModeStatus()
+  }
+
+  function writeModeStatus() {
+    root.pendingStatusText = JSON.stringify({
+      mode: root.mode,
+      error: String(root.error || ""),
+      inputAllowed: root.inputAllowed()
+    }) + "\n"
+    if (statusDirProc.running)
+      statusDirProc.running = false
+    statusDirProc.command = ["install", "-d", "-m", "0700", root.kageDir, root.askRoot, root.issueDir]
+    statusDirProc.running = true
   }
 
   function startFresh() {
@@ -931,6 +947,21 @@ Item {
     id: promptFile
     path: root.promptTxtPath
     printErrors: false
+  }
+
+  FileView {
+    id: statusFile
+    path: root.statusJsonPath
+    printErrors: false
+  }
+
+  Process {
+    id: statusDirProc
+    onExited: function(exitCode) {
+      if (exitCode !== 0 || !root.pendingStatusText.length)
+        return
+      statusFile.setText(root.pendingStatusText)
+    }
   }
 
   FileView {

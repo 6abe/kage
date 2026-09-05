@@ -1201,6 +1201,9 @@ func TestA5Contracts(t *testing.T) {
 		"pendingFresh",
 		"tool_call",
 		"completed",
+		"status.json",
+		"writeModeStatus",
+		"statusFile.setText",
 	} {
 		if !bytes.Contains(service, []byte(want)) {
 			t.Errorf("Service.qml missing %q", want)
@@ -1209,6 +1212,7 @@ func TestA5Contracts(t *testing.T) {
 	for _, want := range []string{
 		"parseFresh",
 		"startFresh",
+		"function setMode(",
 		`objectName: "modeAsk"`,
 		`objectName: "modeDo"`,
 		`text: "Ask"`,
@@ -1219,6 +1223,7 @@ func TestA5Contracts(t *testing.T) {
 		`"updated"`,
 		"onActRecaptureRequested",
 		"skipMic",
+		"inputAllowed",
 	} {
 		if !bytes.Contains(overlay, []byte(want)) {
 			t.Errorf("Overlay.qml missing %q", want)
@@ -1337,6 +1342,28 @@ func TestA5Contracts(t *testing.T) {
 	}
 	if bytes.Contains(modeBody, []byte("--yes")) || bytes.Contains(modeBody, []byte("KAGE_ALLOW_INPUT=1\"")) {
 		t.Error("setMode must not yolo --yes")
+	}
+	if !bytes.Contains(modeBody, []byte("writeModeStatus()")) {
+		t.Error("setMode must write status.json after Ask and refused Do")
+	}
+
+	ovSet := bytes.Index(overlay, []byte("function setMode("))
+	ovSetEnd := bytes.Index(overlay[ovSet:], []byte("function close()"))
+	if ovSet < 0 || ovSetEnd < 0 {
+		t.Fatal("overlay setMode bounds")
+	}
+	ovSetBody := overlay[ovSet : ovSet+ovSetEnd]
+	if !bytes.Contains(ovSetBody, []byte("service.setMode")) {
+		t.Error("overlay setMode must call service.setMode")
+	}
+	if !bytes.Contains(ovSetBody, []byte("JSON.stringify")) {
+		t.Error("overlay setMode must return JSON")
+	}
+	if !bytes.Contains(ovSetBody, []byte("inputAllowed")) || !bytes.Contains(ovSetBody, []byte("mode:")) || !bytes.Contains(ovSetBody, []byte("error:")) {
+		t.Error("overlay setMode JSON must include mode, error, inputAllowed")
+	}
+	if !bytes.Contains(ovSetBody, []byte(`obj.mode`)) && !bytes.Contains(ovSetBody, []byte(`{"mode"`)) {
+		t.Error("overlay setMode must parse {\"mode\":\"do\"}")
 	}
 
 	allowIdx := bytes.Index(service, []byte("function inputAllowed("))
