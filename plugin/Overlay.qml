@@ -120,7 +120,7 @@ Item {
 
   function paintStrokes(ctx, w, h) {
     ctx.strokeStyle = "#e23d28"
-    ctx.lineWidth = Math.max(3, w / 400)
+    ctx.lineWidth = root.service && typeof root.service.strokeWidth === "function" ? root.service.strokeWidth(w) : Math.max(3, Math.round(w / 400))
     ctx.lineCap = "round"
     ctx.lineJoin = "round"
     var all = root.strokes.slice()

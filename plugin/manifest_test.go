@@ -147,6 +147,11 @@ func TestA2Contracts(t *testing.T) {
 		"polyline",
 		"annotatedPath",
 		"id: burnProc",
+		"annotatedTmpPath",
+		"pendingStrokes",
+		"function strokeWidth",
+		"unlinkAnnotated",
+		`"mv"`,
 	} {
 		if !bytes.Contains(service, []byte(want)) {
 			t.Errorf("Service.qml missing %q", want)
@@ -285,6 +290,106 @@ func TestA2Contracts(t *testing.T) {
 	}
 	if !bytes.Contains(service, []byte("root.rawPath")) || !bytes.Contains(service, []byte("root.annotatedPath")) {
 		t.Error("magick must write annotated.png from raw.png")
+	}
+	if !bytes.Contains(overlay, []byte("root.service.burnMarks(all)")) {
+		t.Error("Overlay.qml must pass polylines into service.burnMarks(")
+	}
+	if !bytes.Contains(overlay, []byte("Math.max(3, Math.round(w / 400))")) {
+		t.Error("Overlay ink stroke width must match magick rounding")
+	}
+	if !bytes.Contains(service, []byte("Math.max(3, Math.round(w / 400))")) {
+		t.Error("magick stroke width must match ink rounding")
+	}
+
+	burnIdx := bytes.Index(service, []byte("function burnMarks("))
+	if burnIdx < 0 {
+		t.Fatal("missing burnMarks")
+	}
+	startBurnIdx := bytes.Index(service, []byte("function startBurn("))
+	if startBurnIdx < 0 {
+		t.Fatal("missing startBurn")
+	}
+	startBurnEnd := bytes.Index(service[startBurnIdx:], []byte("function flushPendingBurn()"))
+	if startBurnEnd < 0 {
+		t.Fatal("startBurn not followed by flushPendingBurn")
+	}
+	startBurnBody := service[startBurnIdx : startBurnIdx+startBurnEnd]
+	if !bytes.Contains(startBurnBody, []byte("if (!drew)")) {
+		t.Error("startBurn must return when !drew")
+	}
+	if !bytes.Contains(startBurnBody, []byte("pts.length < 2")) {
+		t.Error("startBurn must skip strokes with pts.length < 2")
+	}
+	drewIdx := bytes.Index(startBurnBody, []byte("if (!drew)"))
+	if drewIdx < 0 {
+		t.Fatal("missing !drew guard")
+	}
+	runIdx := bytes.Index(startBurnBody, []byte("burnProc.running = true"))
+	if runIdx < 0 {
+		t.Fatal("startBurn never starts burnProc")
+	}
+	if drewIdx > runIdx {
+		t.Error("!drew path must not start burnProc")
+	}
+	drewReturn := startBurnBody[drewIdx:]
+	if !bytes.Contains(drewReturn[:min(len(drewReturn), 80)], []byte("return")) {
+		t.Error("!drew must return before starting magick")
+	}
+	if !bytes.Contains(startBurnBody, []byte(`["magick"`)) {
+		t.Error("burn command must start with magick argv, not a shell")
+	}
+	if bytes.Contains(startBurnBody, []byte(`"sh"`)) || bytes.Contains(startBurnBody, []byte(`"-c"`)) {
+		t.Error("burn must not wrap magick in sh -c")
+	}
+
+	burnProcIdx := bytes.Index(service, []byte("id: burnProc"))
+	if burnProcIdx < 0 {
+		t.Fatal("missing burnProc")
+	}
+	burnTail := service[burnProcIdx:]
+	failIdx := bytes.Index(burnTail, []byte("exitCode !== 0"))
+	if failIdx < 0 {
+		t.Fatal("burnProc missing error path")
+	}
+	failReturn := bytes.Index(burnTail[failIdx:], []byte("return"))
+	if failReturn < 0 {
+		t.Fatal("burnProc fail path missing return")
+	}
+	failBody := burnTail[failIdx : failIdx+failReturn]
+	if !bytes.Contains(failBody, []byte("root.error")) {
+		t.Error("burnProc fail path must set root.error")
+	}
+	if bytes.Contains(failBody, []byte("markAnnotated")) || bytes.Contains(failBody, []byte("hasMarks = true")) {
+		t.Error("burnProc fail path must not markAnnotated")
+	}
+	if !bytes.Contains(burnTail, []byte("markAnnotated")) {
+		t.Error("successful burn must still markAnnotated")
+	}
+	mvIdx := bytes.Index(service, []byte("id: mvBurnProc"))
+	if mvIdx < 0 {
+		t.Fatal("missing mvBurnProc")
+	}
+	mvTail := service[mvIdx:]
+	mvFail := bytes.Index(mvTail, []byte("exitCode !== 0"))
+	if mvFail < 0 {
+		t.Fatal("mvBurnProc missing error path")
+	}
+	mvFailRet := bytes.Index(mvTail[mvFail:], []byte("return"))
+	if mvFailRet < 0 {
+		t.Fatal("mvBurnProc fail path missing return")
+	}
+	mvFailBody := mvTail[mvFail : mvFail+mvFailRet]
+	if bytes.Contains(mvFailBody, []byte("markAnnotated")) || bytes.Contains(mvFailBody, []byte("hasMarks = true")) {
+		t.Error("mv fail must not markAnnotated")
+	}
+
+	seeIdx := bytes.Index(service, []byte("id: seeProc"))
+	if seeIdx < 0 {
+		t.Fatal("missing seeProc")
+	}
+	seeBody := service[seeIdx:]
+	if !bytes.Contains(seeBody, []byte("unlinkAnnotated()")) {
+		t.Error("successful grab must unlink leftover annotated.png")
 	}
 }
 

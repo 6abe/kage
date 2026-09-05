@@ -25,6 +25,7 @@ Item {
   readonly property string issueDir: askRoot + "/" + issueId
   readonly property string rawPath: issueDir + "/raw.png"
   readonly property string annotatedPath: issueDir + "/annotated.png"
+  readonly property string annotatedTmpPath: issueDir + "/annotated.png.tmp"
   readonly property string snapshotJsonPath: issueDir + "/snapshot.json"
   readonly property string wavPath: issueDir + "/rec.wav"
 
@@ -35,6 +36,9 @@ Item {
   property bool recAfterTranscribe: false
   property int wavGen: 0
   property int transcribeGen: 0
+  property int burnGen: 0
+  property int burnJobGen: 0
+  property var pendingStrokes: null
   property bool hasMarks: false
   property string imagePath: ""
   property string imageToken: ""
@@ -49,7 +53,13 @@ Item {
     root.grabbing = true
     root.error = ""
     root.hasMarks = false
+    root.pendingStrokes = null
+    root.burnGen += 1
     stopMic()
+    if (burnProc.running)
+      burnProc.running = false
+    if (mvBurnProc.running)
+      mvBurnProc.running = false
     if (ensureDirProc.running)
       ensureDirProc.running = false
     if (seeProc.running)
@@ -123,6 +133,17 @@ Item {
     root.hasMarks = true
   }
 
+  function unlinkAnnotated() {
+    if (rmAnnotatedProc.running)
+      rmAnnotatedProc.running = false
+    rmAnnotatedProc.command = ["rm", "-f", root.annotatedPath, root.annotatedTmpPath]
+    rmAnnotatedProc.running = true
+  }
+
+  function strokeWidth(w) {
+    return Math.max(3, Math.round(w / 400))
+  }
+
   function burnMarks(strokes) {
     if (!root.snapshot || !root.rawPath.length)
       return
@@ -131,7 +152,17 @@ Item {
     if (w <= 0 || h <= 0)
       return
     var list = strokes || []
-    var strokeW = Math.max(3, Math.round(w / 400))
+    if (burnProc.running || mvBurnProc.running) {
+      root.pendingStrokes = list
+      return
+    }
+    startBurn(list)
+  }
+
+  function startBurn(list) {
+    var w = root.snapshot.width || 0
+    var h = root.snapshot.height || 0
+    var strokeW = root.strokeWidth(w)
     var cmd = ["magick", root.rawPath, "-stroke", "#e23d28", "-strokewidth", String(strokeW), "-fill", "none"]
     var drew = false
     for (var s = 0; s < list.length; s++) {
@@ -150,11 +181,17 @@ Item {
     }
     if (!drew)
       return
-    cmd.push(root.annotatedPath)
-    if (burnProc.running)
-      burnProc.running = false
+    cmd.push(root.annotatedTmpPath)
+    root.burnJobGen = root.burnGen
     burnProc.command = cmd
     burnProc.running = true
+  }
+
+  function flushPendingBurn() {
+    var pending = root.pendingStrokes
+    root.pendingStrokes = null
+    if (pending)
+      startBurn(pending)
   }
 
   Process {
@@ -204,6 +241,7 @@ Item {
       root.imagePath = snap.path
       root.imageToken = Date.now().toString()
       snapshotFile.setText(JSON.stringify(snap, null, 2) + "\n")
+      unlinkAnnotated()
       root.grabFinished()
     }
   }
@@ -260,18 +298,53 @@ Item {
   }
 
   Process {
+    id: rmAnnotatedProc
+  }
+
+  Process {
     id: burnProc
     stderr: StdioCollector {
       id: burnErr
       waitForEnd: true
     }
     onExited: function(exitCode) {
+      if (root.burnJobGen !== root.burnGen) {
+        flushPendingBurn()
+        return
+      }
       if (exitCode !== 0) {
         var msg = String(burnErr.text || "").trim()
         root.error = msg.length ? msg : ("magick burn failed (" + exitCode + ")")
+        if (rmTmpProc.running)
+          rmTmpProc.running = false
+        rmTmpProc.command = ["rm", "-f", root.annotatedTmpPath]
+        rmTmpProc.running = true
+        flushPendingBurn()
+        return
+      }
+      mvBurnProc.command = ["mv", "-f", root.annotatedTmpPath, root.annotatedPath]
+      mvBurnProc.running = true
+    }
+  }
+
+  Process {
+    id: rmTmpProc
+  }
+
+  Process {
+    id: mvBurnProc
+    onExited: function(exitCode) {
+      if (root.burnJobGen !== root.burnGen) {
+        flushPendingBurn()
+        return
+      }
+      if (exitCode !== 0) {
+        root.error = "could not install annotated.png"
+        flushPendingBurn()
         return
       }
       root.markAnnotated()
+      flushPendingBurn()
     }
   }
 
