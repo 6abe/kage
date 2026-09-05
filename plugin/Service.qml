@@ -66,6 +66,8 @@ Item {
   property bool pendingResume: false
   property bool sendQueued: false
   property bool startGrokAfterPersist: false
+  property int persistJobGen: 0
+  property int uuidJobGen: 0
 
   signal grabFinished()
   signal transcriptReady(string text)
@@ -73,6 +75,7 @@ Item {
   signal sendFinished()
 
   function grab(payloadJson) {
+    abortQueuedSend()
     root.grabbing = true
     root.error = ""
     root.hasMarks = false
@@ -209,8 +212,18 @@ Item {
     if (!root.isUuid(id))
       return
     root.sessionId = id
-    ensureConfigProc.command = ["install", "-d", "-m", "0700", root.configDir]
-    ensureConfigProc.running = true
+    root.persistJobGen = root.sendGen
+    if (writeSessionProc.running)
+      writeSessionProc.running = false
+    writeSessionProc.command = [
+      "sh", "-c",
+      "install -d -m 0700 \"$1\" && umask 077 && printf '%s\\n' \"$2\" > \"$3\" && chmod 0600 \"$3\"",
+      "kage-ask-session",
+      root.configDir,
+      id,
+      root.sessionFilePath
+    ]
+    writeSessionProc.running = true
   }
 
   function abortSend(msg) {
@@ -219,6 +232,19 @@ Item {
     root.sending = false
     root.error = msg
     root.sendFinished()
+  }
+
+  function abortQueuedSend() {
+    if (grokProc.running)
+      return
+    if (!root.sending && !root.sendQueued && !root.startGrokAfterPersist)
+      return
+    root.sendGen += 1
+    if (uuidProc.running)
+      uuidProc.running = false
+    if (writeSessionProc.running)
+      writeSessionProc.running = false
+    abortSend("send cancelled")
   }
 
   function buildPromptJson() {
@@ -260,12 +286,15 @@ Item {
       startGrok(root.sessionId, true)
       return
     }
+    root.uuidJobGen = root.sendGen
     uuidProc.command = ["uuidgen"]
     uuidProc.running = true
   }
 
   function maybeLaunchQueuedSend() {
     if (!root.sendQueued)
+      return
+    if (root.burnJobGen !== root.burnGen)
       return
     if (root.burnBusy())
       return
@@ -582,33 +611,11 @@ Item {
     Component.onCompleted: reload()
   }
 
-  FileView {
-    id: grokErrFile
-    path: root.grokErrPath
-    printErrors: false
-  }
-
   Process {
-    id: ensureConfigProc
+    id: writeSessionProc
     onExited: function(exitCode) {
-      if (exitCode !== 0) {
-        if (root.startGrokAfterPersist)
-          abortSend("could not create " + root.configDir)
-        else
-          root.error = "could not create " + root.configDir
+      if (root.persistJobGen !== root.sendGen)
         return
-      }
-      if (!root.isUuid(root.sessionId))
-        return
-      sessionFile.setText(root.sessionId + "\n")
-      chmodSessionProc.command = ["chmod", "0600", root.sessionFilePath]
-      chmodSessionProc.running = true
-    }
-  }
-
-  Process {
-    id: chmodSessionProc
-    onExited: function(exitCode) {
       if (exitCode !== 0) {
         if (root.startGrokAfterPersist)
           abortSend("could not write ask-session")
@@ -630,6 +637,8 @@ Item {
       waitForEnd: true
     }
     onExited: function(exitCode) {
+      if (root.uuidJobGen !== root.sendGen)
+        return
       if (exitCode !== 0) {
         root.sending = false
         root.error = "uuidgen failed"
@@ -653,7 +662,7 @@ Item {
   }
 
   Process {
-    id: chmodGrokErrProc
+    id: writeGrokErrProc
   }
 
   Process {
@@ -675,9 +684,14 @@ Item {
       root.sending = false
       var errText = String(grokErr.text || "")
       if (errText.length) {
-        grokErrFile.setText(errText)
-        chmodGrokErrProc.command = ["chmod", "0600", root.grokErrPath]
-        chmodGrokErrProc.running = true
+        writeGrokErrProc.command = [
+          "sh", "-c",
+          "umask 077 && printf '%s' \"$1\" > \"$2\" && chmod 0600 \"$2\"",
+          "kage-ask-grok-err",
+          errText,
+          root.grokErrPath
+        ]
+        writeGrokErrProc.running = true
       }
       if (exitCode !== 0 && !root.streamBuf.length)
         root.error = "grok failed (" + exitCode + ")"

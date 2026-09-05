@@ -613,28 +613,40 @@ func TestA3Contracts(t *testing.T) {
 		t.Error("uuidgen fail must not start grok or persist a session")
 	}
 
-	cfgIdx := bytes.Index(service, []byte("id: ensureConfigProc"))
+	cfgIdx := bytes.Index(service, []byte("id: writeSessionProc"))
 	if cfgIdx < 0 {
-		t.Fatal("missing ensureConfigProc")
+		t.Fatal("missing writeSessionProc")
 	}
 	cfgTail := service[cfgIdx:]
 	cfgFail := bytes.Index(cfgTail, []byte("exitCode !== 0"))
 	if cfgFail < 0 {
-		t.Fatal("ensureConfigProc missing error path")
+		t.Fatal("writeSessionProc missing error path")
 	}
 	cfgFailRet := bytes.Index(cfgTail[cfgFail:], []byte("return"))
 	if cfgFailRet < 0 {
-		t.Fatal("ensureConfigProc fail missing return")
+		t.Fatal("writeSessionProc fail missing return")
 	}
 	cfgFailBody := cfgTail[cfgFail : cfgFail+cfgFailRet]
 	if !bytes.Contains(cfgFailBody, []byte("root.error")) && !bytes.Contains(cfgFailBody, []byte("abortSend")) {
-		t.Error("config-dir fail must set root.error")
+		t.Error("session write fail must set root.error")
 	}
 	if bytes.Contains(cfgFailBody, []byte("setText")) {
-		t.Error("config-dir fail must not write ask-session")
+		t.Error("session write fail must not FileView.setText ask-session")
 	}
 	if bytes.Contains(cfgFailBody, []byte("startGrok(")) {
-		t.Error("config-dir fail must not start grok")
+		t.Error("session write fail must not start grok")
+	}
+	persistIdx := bytes.Index(service, []byte("function persistSessionId("))
+	persistEnd := bytes.Index(service[persistIdx:], []byte("function abortSend("))
+	if persistIdx < 0 || persistEnd < 0 {
+		t.Fatal("persistSessionId bounds")
+	}
+	persistBody := service[persistIdx : persistIdx+persistEnd]
+	if !bytes.Contains(persistBody, []byte("chmod 0600")) && !bytes.Contains(persistBody, []byte(`"0600"`)) {
+		t.Error("ask-session write must set mode 0600 in the same process")
+	}
+	if bytes.Contains(persistBody, []byte("sessionFile.setText")) {
+		t.Error("must not chmod ask-session before the write process exits")
 	}
 
 	grokIdx := bytes.Index(service, []byte("id: grokProc"))
@@ -746,6 +758,38 @@ func TestA3Contracts(t *testing.T) {
 	if bytes.Contains(closeBody, []byte("grokProc.running = false")) {
 		t.Error("Esc/close must not kill the grok process")
 	}
+	if !bytes.Contains(closeBody, []byte("abortQueuedSend")) {
+		t.Error("close must drop a queued send that has not started grok")
+	}
+
+	grabIdx := bytes.Index(service, []byte("function grab("))
+	grabEnd := bytes.Index(service[grabIdx:], []byte("function startRecording()"))
+	if grabIdx < 0 || grabEnd < 0 {
+		t.Fatal("grab bounds")
+	}
+	grabBody := service[grabIdx : grabIdx+grabEnd]
+	if !bytes.Contains(grabBody, []byte("abortQueuedSend")) {
+		t.Error("grab must drop a queued send so sending cannot stick")
+	}
+	if bytes.Contains(grabBody, []byte("grokProc.running = false")) {
+		t.Error("grab must not kill an in-flight grok process")
+	}
+
+	abortQ := bytes.Index(service, []byte("function abortQueuedSend()"))
+	if abortQ < 0 {
+		t.Fatal("missing abortQueuedSend")
+	}
+	abortQEnd := bytes.Index(service[abortQ:], []byte("function buildPromptJson()"))
+	if abortQEnd < 0 {
+		t.Fatal("abortQueuedSend bounds")
+	}
+	abortQBody := service[abortQ : abortQ+abortQEnd]
+	if !bytes.Contains(abortQBody, []byte("grokProc.running")) {
+		t.Error("abortQueuedSend must leave a running grok process")
+	}
+	if bytes.Contains(abortQBody, []byte("grokProc.running = false")) {
+		t.Error("abortQueuedSend must not kill grok")
+	}
 
 	for _, want := range []string{
 		"function onSendClicked()",
@@ -808,7 +852,7 @@ func TestA3Contracts(t *testing.T) {
 		t.Error("onSendClicked must require a grab")
 	}
 
-	if !bytes.Contains(service, []byte(`"chmod"`)) || !bytes.Contains(service, []byte(`"0600"`)) {
+	if !bytes.Contains(service, []byte("chmod 0600")) {
 		t.Error("ask-session must be chmod 0600")
 	}
 	sessIdx := bytes.Index(service, []byte("id: sessionFile"))

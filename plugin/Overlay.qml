@@ -82,6 +82,8 @@ Item {
   }
 
   function close() {
+    if (root.service && typeof root.service.abortQueuedSend === "function")
+      root.service.abortQueuedSend()
     if (root.service && typeof root.service.stopMic === "function")
       root.service.stopMic()
     root.summoning = false
