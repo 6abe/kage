@@ -28,7 +28,9 @@ Item {
   readonly property string annotatedTmpPath: issueDir + "/annotated.png.tmp"
   readonly property string snapshotJsonPath: issueDir + "/snapshot.json"
   readonly property string promptTxtPath: issueDir + "/prompt.txt"
+  readonly property string grokErrPath: issueDir + "/grok.err"
   readonly property string wavPath: issueDir + "/rec.wav"
+  readonly property int composerMaxChars: 32000
   readonly property string homeDir: {
     var h = Quickshell.env("HOME")
     return h && h.length ? h : "/home"
@@ -62,6 +64,8 @@ Item {
   property int grokJobGen: 0
   property string pendingPromptJson: ""
   property bool pendingResume: false
+  property bool sendQueued: false
+  property bool startGrokAfterPersist: false
 
   signal grabFinished()
   signal transcriptReady(string text)
@@ -171,6 +175,19 @@ Item {
     return root.rawPath
   }
 
+  function isUuid(id) {
+    var s = String(id || "")
+    return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(s)
+  }
+
+  function burnBusy() {
+    return burnProc.running || mvBurnProc.running || rmTmpProc.running || !!root.pendingStrokes
+  }
+
+  function grabReady() {
+    return !root.grabbing && !!root.snapshot && !!root.imagePath
+  }
+
   function appendChat(role, text) {
     var next = root.chatMessages.slice()
     next.push({ role: role, text: text })
@@ -189,9 +206,19 @@ Item {
   }
 
   function persistSessionId(id) {
+    if (!root.isUuid(id))
+      return
     root.sessionId = id
     ensureConfigProc.command = ["install", "-d", "-m", "0700", root.configDir]
     ensureConfigProc.running = true
+  }
+
+  function abortSend(msg) {
+    root.sendQueued = false
+    root.startGrokAfterPersist = false
+    root.sending = false
+    root.error = msg
+    root.sendFinished()
   }
 
   function buildPromptJson() {
@@ -203,8 +230,12 @@ Item {
   function send() {
     if (root.sending || grokProc.running)
       return
-    if (!root.rawPath.length) {
+    if (!root.grabReady()) {
       root.error = "nothing to send"
+      return
+    }
+    if (String(root.composerText || "").length > root.composerMaxChars) {
+      root.error = "message too long"
       return
     }
     stopMic()
@@ -212,11 +243,19 @@ Item {
     root.sending = true
     root.sendGen += 1
     root.streamBuf = ""
+    if (root.burnBusy()) {
+      root.sendQueued = true
+      return
+    }
+    launchSend()
+  }
+
+  function launchSend() {
     promptFile.setText(String(root.composerText || ""))
     var userText = String(root.composerText || "")
     appendChat("user", userText)
     root.pendingPromptJson = root.buildPromptJson()
-    root.pendingResume = root.sessionId.length > 0
+    root.pendingResume = root.isUuid(root.sessionId)
     if (root.pendingResume) {
       startGrok(root.sessionId, true)
       return
@@ -225,16 +264,38 @@ Item {
     uuidProc.running = true
   }
 
+  function maybeLaunchQueuedSend() {
+    if (!root.sendQueued)
+      return
+    if (root.burnBusy())
+      return
+    root.sendQueued = false
+    if (!root.grabReady()) {
+      abortSend("nothing to send")
+      return
+    }
+    launchSend()
+  }
+
   function startGrok(id, resume) {
     var cmd = [
-      "grok", "-p", ".",
+      "grok",
       "--prompt-json", root.pendingPromptJson,
       "--output-format", "streaming-json",
       "--cwd", root.homeDir,
-      "--deny", "click",
-      "--deny", "type",
-      "--deny", "press",
-      "--deny", "hotkey",
+      "--permission-mode", "dontAsk",
+      "--deny", "kage click",
+      "--deny", "kage type",
+      "--deny", "kage press",
+      "--deny", "kage hotkey",
+      "--deny", "mcp__kage__kage_click",
+      "--deny", "mcp__kage__kage_type",
+      "--deny", "mcp__kage__kage_press",
+      "--deny", "mcp__kage__kage_hotkey",
+      "--deny", "Bash(kage click*)",
+      "--deny", "Bash(kage type*)",
+      "--deny", "Bash(kage press*)",
+      "--deny", "Bash(kage hotkey*)",
       "--disallowed-tools", "kage__kage_click,kage__kage_type,kage__kage_press,kage__kage_hotkey"
     ]
     if (resume) {
@@ -260,12 +321,8 @@ Item {
     } catch (e) {
       return
     }
-    if (!obj)
+    if (!obj || typeof obj !== "object")
       return
-    if (obj.sessionId && typeof obj.sessionId === "string" && obj.sessionId.length)
-      persistSessionId(obj.sessionId)
-    if (obj.session_id && typeof obj.session_id === "string" && obj.session_id.length)
-      persistSessionId(obj.session_id)
     if (obj.type === "text" && obj.data != null)
       root.streamBuf += String(obj.data)
     else if (obj.type === "assistant" && obj.text)
@@ -454,6 +511,8 @@ Item {
       if (exitCode !== 0) {
         var msg = String(burnErr.text || "").trim()
         root.error = msg.length ? msg : ("magick burn failed (" + exitCode + ")")
+        if (root.sendQueued)
+          abortSend(root.error)
         if (!rmTmpProc.running) {
           rmTmpProc.command = ["rm", "-f", root.annotatedTmpPath]
           rmTmpProc.running = true
@@ -469,6 +528,7 @@ Item {
     id: rmTmpProc
     onExited: function() {
       flushPendingBurn()
+      maybeLaunchQueuedSend()
     }
   }
 
@@ -481,11 +541,14 @@ Item {
       }
       if (exitCode !== 0) {
         root.error = "could not install annotated.png"
+        if (root.sendQueued)
+          abortSend(root.error)
         flushPendingBurn()
         return
       }
       root.markAnnotated()
       flushPendingBurn()
+      maybeLaunchQueuedSend()
     }
   }
 
@@ -508,19 +571,55 @@ Item {
     watchChanges: true
     onLoaded: function() {
       var id = String(text() || "").trim()
-      if (id.length)
+      if (root.isUuid(id))
         root.sessionId = id
     }
-    onFileChanged: reload()
+    onFileChanged: {
+      if (root.sending)
+        return
+      reload()
+    }
     Component.onCompleted: reload()
+  }
+
+  FileView {
+    id: grokErrFile
+    path: root.grokErrPath
+    printErrors: false
   }
 
   Process {
     id: ensureConfigProc
     onExited: function(exitCode) {
-      if (exitCode !== 0)
+      if (exitCode !== 0) {
+        if (root.startGrokAfterPersist)
+          abortSend("could not create " + root.configDir)
+        else
+          root.error = "could not create " + root.configDir
+        return
+      }
+      if (!root.isUuid(root.sessionId))
         return
       sessionFile.setText(root.sessionId + "\n")
+      chmodSessionProc.command = ["chmod", "0600", root.sessionFilePath]
+      chmodSessionProc.running = true
+    }
+  }
+
+  Process {
+    id: chmodSessionProc
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        if (root.startGrokAfterPersist)
+          abortSend("could not write ask-session")
+        else
+          root.error = "could not write ask-session"
+        return
+      }
+      if (!root.startGrokAfterPersist)
+        return
+      root.startGrokAfterPersist = false
+      startGrok(root.sessionId, false)
     }
   }
 
@@ -544,9 +643,17 @@ Item {
         root.sendFinished()
         return
       }
+      if (!root.isUuid(id)) {
+        abortSend("uuidgen returned invalid id")
+        return
+      }
+      root.startGrokAfterPersist = true
       persistSessionId(id)
-      startGrok(id, false)
     }
+  }
+
+  Process {
+    id: chmodGrokErrProc
   }
 
   Process {
@@ -566,12 +673,16 @@ Item {
       if (root.grokJobGen !== root.sendGen)
         return
       root.sending = false
-      if (exitCode !== 0 && !root.streamBuf.length) {
-        var msg = String(grokErr.text || "").trim()
-        root.error = msg.length ? msg : ("grok failed (" + exitCode + ")")
-      } else if (root.streamBuf.length) {
-        setLastAssistant(root.streamBuf)
+      var errText = String(grokErr.text || "")
+      if (errText.length) {
+        grokErrFile.setText(errText)
+        chmodGrokErrProc.command = ["chmod", "0600", root.grokErrPath]
+        chmodGrokErrProc.running = true
       }
+      if (exitCode !== 0 && !root.streamBuf.length)
+        root.error = "grok failed (" + exitCode + ")"
+      else if (root.streamBuf.length)
+        setLastAssistant(root.streamBuf)
       root.sendFinished()
     }
   }

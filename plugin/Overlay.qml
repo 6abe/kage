@@ -115,9 +115,12 @@ Item {
   function onSendClicked() {
     if (!root.service || typeof root.service.send !== "function")
       return
-    if (root.service.sending)
+    if (root.service.sending || root.service.grabbing)
+      return
+    if (!root.service.snapshot || !root.service.imagePath)
       return
     root.service.composerText = composer.text
+    root.burnMarks()
     root.service.send()
   }
 
@@ -499,6 +502,7 @@ Item {
             foreground: root.foreground
             accent: root.accent
             bordered: true
+            enabled: root.grabReady && root.service && !root.service.sending && !root.service.grabbing
             onClicked: root.onSendClicked()
           }
         }

@@ -476,6 +476,11 @@ func TestA3Contracts(t *testing.T) {
 		"function handleStreamLine(",
 		"function payloadImagePath()",
 		"function persistSessionId(",
+		"function grabReady()",
+		"function burnBusy()",
+		"function isUuid(",
+		"function launchSend()",
+		"composerMaxChars",
 		"ask-session",
 		"--prompt-json",
 		"--output-format",
@@ -484,11 +489,14 @@ func TestA3Contracts(t *testing.T) {
 		"--resume",
 		"--cwd",
 		"homeDir",
+		"--permission-mode",
+		"dontAsk",
 		"--deny",
-		"click",
-		"type",
-		"press",
-		"hotkey",
+		"mcp__kage__kage_click",
+		"kage click",
+		"kage type",
+		"kage press",
+		"kage hotkey",
 		"--disallowed-tools",
 		"kage__kage_click",
 		"prompt.txt",
@@ -526,28 +534,59 @@ func TestA3Contracts(t *testing.T) {
 	if sendIdx < 0 {
 		t.Fatal("missing send")
 	}
-	sendEnd := bytes.Index(service[sendIdx:], []byte("function startGrok("))
+	sendEnd := bytes.Index(service[sendIdx:], []byte("function launchSend()"))
 	if sendEnd < 0 {
-		t.Fatal("send not followed by startGrok")
+		t.Fatal("send not followed by launchSend")
 	}
 	sendBody := service[sendIdx : sendIdx+sendEnd]
 	if !bytes.Contains(sendBody, []byte("stopMic()")) {
 		t.Error("send must stopMic")
 	}
-	if !bytes.Contains(sendBody, []byte("promptFile.setText")) {
-		t.Error("send must write prompt.txt")
+	if !bytes.Contains(sendBody, []byte("grabReady()")) {
+		t.Error("send must require a finished grab")
 	}
-	if !bytes.Contains(sendBody, []byte("appendChat")) {
-		t.Error("send must append the user turn")
+	if !bytes.Contains(sendBody, []byte("composerMaxChars")) {
+		t.Error("send must cap composer length")
 	}
-	if bytes.Contains(sendBody, []byte("startGrok(")) && bytes.Index(sendBody, []byte("uuidProc")) < 0 {
-		t.Error("first send must uuidgen when no session")
+	if bytes.Contains(sendBody, []byte("appendChat")) || bytes.Contains(sendBody, []byte("uuidProc")) || bytes.Contains(sendBody, []byte("startGrok(")) {
+		t.Error("send error/wait path must not appendChat, uuidgen, or startGrok")
 	}
-	if !bytes.Contains(sendBody, []byte("pendingResume")) {
-		t.Error("send must resume when sessionId is set")
+	if !bytes.Contains(sendBody, []byte("burnBusy()")) || !bytes.Contains(sendBody, []byte("sendQueued")) {
+		t.Error("send must wait for in-flight burn")
 	}
 	if bytes.Contains(sendBody, []byte("grokProc.running = false")) {
 		t.Error("send must not kill an in-flight grok")
+	}
+	failNothing := bytes.Index(sendBody, []byte("nothing to send"))
+	if failNothing < 0 {
+		t.Fatal("send missing nothing-to-send path")
+	}
+	failRet := bytes.Index(sendBody[failNothing:], []byte("return"))
+	if failRet < 0 {
+		t.Fatal("nothing-to-send missing return")
+	}
+	nothingBody := sendBody[failNothing : failNothing+failRet]
+	if bytes.Contains(nothingBody, []byte("appendChat")) || bytes.Contains(nothingBody, []byte("uuidProc")) || bytes.Contains(nothingBody, []byte("startGrok")) {
+		t.Error("nothing-to-send must not appendChat, uuidgen, or startGrok")
+	}
+
+	launchIdx := bytes.Index(service, []byte("function launchSend()"))
+	launchEnd := bytes.Index(service[launchIdx:], []byte("function maybeLaunchQueuedSend()"))
+	if launchIdx < 0 || launchEnd < 0 {
+		t.Fatal("launchSend bounds")
+	}
+	launchBody := service[launchIdx : launchIdx+launchEnd]
+	if !bytes.Contains(launchBody, []byte("promptFile.setText")) {
+		t.Error("launchSend must write prompt.txt")
+	}
+	if !bytes.Contains(launchBody, []byte("appendChat")) {
+		t.Error("launchSend must append the user turn")
+	}
+	if !bytes.Contains(launchBody, []byte("uuidProc")) {
+		t.Error("first send must uuidgen when no session")
+	}
+	if !bytes.Contains(launchBody, []byte("pendingResume")) {
+		t.Error("send must resume when sessionId is set")
 	}
 
 	uuidIdx := bytes.Index(service, []byte("id: uuidProc"))
@@ -559,11 +598,11 @@ func TestA3Contracts(t *testing.T) {
 	if failIdx < 0 {
 		t.Fatal("uuidProc missing error path")
 	}
-	failRet := bytes.Index(uuidTail[failIdx:], []byte("return"))
-	if failRet < 0 {
+	uuidFailRet := bytes.Index(uuidTail[failIdx:], []byte("return"))
+	if uuidFailRet < 0 {
 		t.Fatal("uuidProc fail path missing return")
 	}
-	uuidFail := uuidTail[failIdx : failIdx+failRet]
+	uuidFail := uuidTail[failIdx : failIdx+uuidFailRet]
 	if !bytes.Contains(uuidFail, []byte("root.error")) {
 		t.Error("uuidgen fail must set root.error")
 	}
@@ -574,6 +613,30 @@ func TestA3Contracts(t *testing.T) {
 		t.Error("uuidgen fail must not start grok or persist a session")
 	}
 
+	cfgIdx := bytes.Index(service, []byte("id: ensureConfigProc"))
+	if cfgIdx < 0 {
+		t.Fatal("missing ensureConfigProc")
+	}
+	cfgTail := service[cfgIdx:]
+	cfgFail := bytes.Index(cfgTail, []byte("exitCode !== 0"))
+	if cfgFail < 0 {
+		t.Fatal("ensureConfigProc missing error path")
+	}
+	cfgFailRet := bytes.Index(cfgTail[cfgFail:], []byte("return"))
+	if cfgFailRet < 0 {
+		t.Fatal("ensureConfigProc fail missing return")
+	}
+	cfgFailBody := cfgTail[cfgFail : cfgFail+cfgFailRet]
+	if !bytes.Contains(cfgFailBody, []byte("root.error")) && !bytes.Contains(cfgFailBody, []byte("abortSend")) {
+		t.Error("config-dir fail must set root.error")
+	}
+	if bytes.Contains(cfgFailBody, []byte("setText")) {
+		t.Error("config-dir fail must not write ask-session")
+	}
+	if bytes.Contains(cfgFailBody, []byte("startGrok(")) {
+		t.Error("config-dir fail must not start grok")
+	}
+
 	grokIdx := bytes.Index(service, []byte("id: grokProc"))
 	if grokIdx < 0 {
 		t.Fatal("missing grokProc")
@@ -581,9 +644,6 @@ func TestA3Contracts(t *testing.T) {
 	grokTail := service[grokIdx:]
 	if !bytes.Contains(grokTail, []byte("SplitParser")) {
 		t.Error("grok stdout must stream via SplitParser")
-	}
-	if bytes.Contains(grokTail, []byte("waitForEnd: true")) && bytes.Index(grokTail, []byte("id: grokErr")) > bytes.Index(grokTail, []byte("SplitParser")) {
-		// stderr collector may wait; stdout must not
 	}
 	stdoutSlice := grokTail
 	if sp := bytes.Index(stdoutSlice, []byte("stdout:")); sp >= 0 {
@@ -599,6 +659,25 @@ func TestA3Contracts(t *testing.T) {
 			t.Error("grok stdout must stream lines, not collect until exit")
 		}
 	}
+	grokFail := bytes.Index(grokTail, []byte("exitCode !== 0"))
+	if grokFail < 0 {
+		t.Fatal("grokProc missing error path")
+	}
+	if !bytes.Contains(grokTail, []byte("sending = false")) {
+		t.Error("grok exit must clear sending")
+	}
+	if !bytes.Contains(grokTail, []byte("sendFinished")) {
+		t.Error("grok exit must sendFinished")
+	}
+	if bytes.Contains(grokTail, []byte("grokErr.text")) && bytes.Contains(grokTail, []byte("root.error = msg")) {
+		t.Error("must not dump grok stderr into the overlay")
+	}
+	if !bytes.Contains(grokTail, []byte("grok failed (")) {
+		t.Error("grok fail with empty streamBuf must set a short local error")
+	}
+	if bytes.Contains(grokTail, []byte("startGrok(")) {
+		t.Error("grok fail must not spawn another grok")
+	}
 
 	startIdx := bytes.Index(service, []byte("function startGrok("))
 	startEnd := bytes.Index(service[startIdx:], []byte("function handleStreamLine("))
@@ -612,12 +691,25 @@ func TestA3Contracts(t *testing.T) {
 	if bytes.Contains(startBody, []byte("git")) {
 		t.Error("must not guess a repo cwd")
 	}
-	if !bytes.Contains(startBody, []byte(`"-p"`)) {
-		t.Error("bootstrap grok must pass -p")
+	if bytes.Contains(startBody, []byte(`"-p"`)) || bytes.Contains(startBody, []byte(`"."`)) {
+		t.Error("must not pass -p with a dummy \".\" prompt; --prompt-json is headless")
+	}
+	if bytes.Contains(startBody, []byte("bypassPermissions")) {
+		t.Error("Ask mode must not auto-approve tools")
+	}
+
+	hsIdx := bytes.Index(service, []byte("function handleStreamLine("))
+	hsEnd := bytes.Index(service[hsIdx:], []byte("function burnMarks("))
+	if hsIdx < 0 || hsEnd < 0 {
+		t.Fatal("handleStreamLine bounds")
+	}
+	hsBody := service[hsIdx : hsIdx+hsEnd]
+	if bytes.Contains(hsBody, []byte("persistSessionId")) || bytes.Contains(hsBody, []byte("sessionId")) {
+		t.Error("stream lines must not clobber ask-session")
 	}
 
 	payloadIdx := bytes.Index(service, []byte("function payloadImagePath()"))
-	payloadEnd := bytes.Index(service[payloadIdx:], []byte("function appendChat("))
+	payloadEnd := bytes.Index(service[payloadIdx:], []byte("function isUuid("))
 	if payloadIdx < 0 || payloadEnd < 0 {
 		t.Fatal("payloadImagePath bounds")
 	}
@@ -678,6 +770,62 @@ func TestA3Contracts(t *testing.T) {
 	retBody := keys[ret : ret+400]
 	if !bytes.Contains(retBody, []byte("ControlModifier")) {
 		t.Error("Send on Return must require Ctrl")
+	}
+
+	recIdx := bytes.Index(overlay, []byte("function onRecClicked()"))
+	recEnd := bytes.Index(overlay[recIdx:], []byte("function onStopClicked()"))
+	stopEnd := bytes.Index(overlay[recIdx+recEnd:], []byte("function onSendClicked()"))
+	if recIdx < 0 || recEnd < 0 || stopEnd < 0 {
+		t.Fatal("rec/stop/send handler bounds")
+	}
+	recBody := overlay[recIdx : recIdx+recEnd]
+	stopBody := overlay[recIdx+recEnd : recIdx+recEnd+stopEnd]
+	if bytes.Contains(recBody, []byte(".send(")) || bytes.Contains(stopBody, []byte(".send(")) {
+		t.Error("Rec/Stop must not send")
+	}
+	trIdx := bytes.Index(overlay, []byte("function onTranscriptReady"))
+	trEnd := bytes.Index(overlay[trIdx:], []byte("function onChatUpdated"))
+	if trIdx < 0 || trEnd < 0 {
+		t.Fatal("onTranscriptReady bounds")
+	}
+	trBody := overlay[trIdx : trIdx+trEnd]
+	if bytes.Contains(trBody, []byte(".send(")) {
+		t.Error("transcript must not auto-send")
+	}
+	sendClick := bytes.Index(overlay, []byte("function onSendClicked()"))
+	sendClickEnd := bytes.Index(overlay[sendClick:], []byte("function fittedRect"))
+	if sendClick < 0 || sendClickEnd < 0 {
+		t.Fatal("onSendClicked bounds")
+	}
+	sendClickBody := overlay[sendClick : sendClick+sendClickEnd]
+	if !bytes.Contains(sendClickBody, []byte("service.send()")) {
+		t.Error("onSendClicked must call send")
+	}
+	if !bytes.Contains(sendClickBody, []byte("burnMarks()")) {
+		t.Error("onSendClicked must burn marks before send")
+	}
+	if !bytes.Contains(sendClickBody, []byte("imagePath")) {
+		t.Error("onSendClicked must require a grab")
+	}
+
+	if !bytes.Contains(service, []byte(`"chmod"`)) || !bytes.Contains(service, []byte(`"0600"`)) {
+		t.Error("ask-session must be chmod 0600")
+	}
+	sessIdx := bytes.Index(service, []byte("id: sessionFile"))
+	if sessIdx < 0 {
+		t.Fatal("missing sessionFile")
+	}
+	sessTail := service[sessIdx:]
+	sessEnd := bytes.Index(sessTail[1:], []byte("id: "))
+	if sessEnd < 0 {
+		sessEnd = 800
+	}
+	sessBody := sessTail[:sessEnd+1]
+	if !bytes.Contains(sessBody, []byte("isUuid")) {
+		t.Error("session file load must reject non-UUIDs")
+	}
+	if !bytes.Contains(sessBody, []byte("root.sending")) {
+		t.Error("must not reload ask-session while sending")
 	}
 }
 

@@ -44,4 +44,4 @@ Unbind first if that chord is already mapped.
 
 The overlay shells out to `kage see --path …`. It does not call grim, slurp, or `omarchy screenshot`. Snapshots land under `$XDG_RUNTIME_DIR/kage/ask/` at mode 0700.
 
-Send writes `prompt.txt`, then runs `grok -p --prompt-json --output-format streaming-json` with `--session-id` (first turn) or `--resume` (later). cwd is `$HOME`. Ask mode denies click/type/press/hotkey. The current session UUID is `~/.config/kage/ask-session`. Screenshots stay files; nothing is base64.
+Send writes `prompt.txt`, then runs `grok --prompt-json --output-format streaming-json` with `--session-id` (first turn) or `--resume` (later). cwd is `$HOME`. Ask mode uses `--permission-mode dontAsk` and denies kage click/type/press/hotkey. The current session UUID is `~/.config/kage/ask-session` (mode 0600). Screenshots stay files; nothing is base64.
