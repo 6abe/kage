@@ -378,6 +378,9 @@ func TestA2Contracts(t *testing.T) {
 	if !bytes.Contains(failBody, []byte("annotatedTmpPath")) && !bytes.Contains(failBody, []byte("rmTmpProc")) {
 		t.Error("magick fail must unlink annotated.png.tmp")
 	}
+	if bytes.Contains(failBody, []byte("flushPendingBurn")) || bytes.Contains(failBody, []byte("startBurn")) {
+		t.Error("magick fail must not startBurn while tmp unlink is running")
+	}
 	if !bytes.Contains(burnTail, []byte("markAnnotated")) {
 		t.Error("successful burn must still markAnnotated")
 	}
@@ -430,6 +433,33 @@ func TestA2Contracts(t *testing.T) {
 	rmBody := rmTail[:rmEnd+1]
 	if !bytes.Contains(rmBody, []byte("grabFinished")) {
 		t.Error("rmAnnotatedProc onExited must grabFinished after unlink")
+	}
+	unlinkFn := bytes.Index(service, []byte("function unlinkAnnotated()"))
+	if unlinkFn < 0 {
+		t.Fatal("missing unlinkAnnotated")
+	}
+	unlinkEnd := bytes.Index(service[unlinkFn:], []byte("function strokeWidth"))
+	if unlinkEnd < 0 {
+		t.Fatal("unlinkAnnotated bounds")
+	}
+	unlinkBody := service[unlinkFn : unlinkFn+unlinkEnd]
+	if bytes.Contains(unlinkBody, []byte("rmAnnotatedProc.running = false")) {
+		t.Error("unlinkAnnotated must not kill in-flight rm")
+	}
+	if !bytes.Contains(unlinkBody, []byte("unlinkJobGen")) {
+		t.Error("unlink job id must be assigned when unlink starts")
+	}
+	rmTmpIdx := bytes.Index(service, []byte("id: rmTmpProc"))
+	if rmTmpIdx < 0 {
+		t.Fatal("missing rmTmpProc")
+	}
+	rmTmpTail := service[rmTmpIdx:]
+	rmTmpEnd := bytes.Index(rmTmpTail[1:], []byte("id: "))
+	if rmTmpEnd < 0 {
+		rmTmpEnd = len(rmTmpTail) - 1
+	}
+	if !bytes.Contains(rmTmpTail[:rmTmpEnd+1], []byte("flushPendingBurn")) {
+		t.Error("rmTmpProc onExited must flushPendingBurn")
 	}
 }
 

@@ -137,8 +137,9 @@ Item {
   }
 
   function unlinkAnnotated() {
+    root.unlinkJobGen = root.grabGen
     if (rmAnnotatedProc.running)
-      rmAnnotatedProc.running = false
+      return
     rmAnnotatedProc.command = ["rm", "-f", root.annotatedPath, root.annotatedTmpPath]
     rmAnnotatedProc.running = true
   }
@@ -245,7 +246,6 @@ Item {
       root.imagePath = snap.path
       root.imageToken = Date.now().toString()
       snapshotFile.setText(JSON.stringify(snap, null, 2) + "\n")
-      root.unlinkJobGen = root.grabGen
       unlinkAnnotated()
     }
   }
@@ -326,11 +326,10 @@ Item {
       if (exitCode !== 0) {
         var msg = String(burnErr.text || "").trim()
         root.error = msg.length ? msg : ("magick burn failed (" + exitCode + ")")
-        if (rmTmpProc.running)
-          rmTmpProc.running = false
-        rmTmpProc.command = ["rm", "-f", root.annotatedTmpPath]
-        rmTmpProc.running = true
-        flushPendingBurn()
+        if (!rmTmpProc.running) {
+          rmTmpProc.command = ["rm", "-f", root.annotatedTmpPath]
+          rmTmpProc.running = true
+        }
         return
       }
       mvBurnProc.command = ["mv", "-f", root.annotatedTmpPath, root.annotatedPath]
@@ -340,6 +339,9 @@ Item {
 
   Process {
     id: rmTmpProc
+    onExited: function() {
+      flushPendingBurn()
+    }
   }
 
   Process {
