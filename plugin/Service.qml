@@ -19,25 +19,75 @@ Item {
   property string issueId: "current"
   readonly property string issueDir: askRoot + "/" + issueId
   readonly property string rawPath: issueDir + "/raw.png"
+  readonly property string annotatedPath: issueDir + "/annotated.png"
   readonly property string snapshotJsonPath: issueDir + "/snapshot.json"
+  readonly property string wavPath: issueDir + "/rec.wav"
 
   property bool grabbing: false
+  property bool recording: false
+  property bool transcribing: false
+  property bool hasMarks: false
   property string imagePath: ""
   property string imageToken: ""
   property var snapshot: null
   property string error: ""
+  property string composerText: ""
 
   signal grabFinished()
+  signal transcriptReady(string text)
 
   function grab(payloadJson) {
     root.grabbing = true
     root.error = ""
+    root.hasMarks = false
+    stopMic()
     if (ensureDirProc.running)
       ensureDirProc.running = false
     if (seeProc.running)
       seeProc.running = false
     ensureDirProc.command = ["install", "-d", "-m", "0700", root.askRoot, root.issueDir]
     ensureDirProc.running = true
+  }
+
+  function startRecording() {
+    if (root.recording || recProc.running)
+      return
+    if (transcribeProc.running)
+      transcribeProc.running = false
+    root.transcribing = false
+    recProc.command = ["pw-record", "--rate", "16000", "--channels", "1", "--format", "s16", root.wavPath]
+    recProc.running = true
+    root.recording = true
+  }
+
+  function cancelRecording() {
+    if (recProc.running)
+      recProc.running = false
+    root.recording = false
+    root.transcribing = false
+    if (transcribeProc.running)
+      transcribeProc.running = false
+  }
+
+  function stopMic() {
+    cancelRecording()
+  }
+
+  function stopAndTranscribe() {
+    if (!root.recording && !recProc.running)
+      return
+    root.recording = false
+    if (recProc.running)
+      recProc.running = false
+    root.transcribing = true
+    transcribeProc.command = ["voxtype", "transcribe", root.wavPath]
+    transcribeProc.running = true
+  }
+
+  function markAnnotated() {
+    root.hasMarks = true
+    root.imagePath = root.annotatedPath
+    root.imageToken = Date.now().toString()
   }
 
   Process {
@@ -88,6 +138,41 @@ Item {
       root.imageToken = Date.now().toString()
       snapshotFile.setText(JSON.stringify(snap, null, 2) + "\n")
       root.grabFinished()
+    }
+  }
+
+  Process {
+    id: recProc
+    onExited: function() {
+      root.recording = false
+    }
+  }
+
+  Process {
+    id: transcribeProc
+    stdout: StdioCollector {
+      id: transcribeOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector {
+      id: transcribeErr
+      waitForEnd: true
+    }
+    onExited: function(exitCode) {
+      root.transcribing = false
+      if (exitCode !== 0) {
+        var msg = String(transcribeErr.text || transcribeOut.text || "").trim()
+        root.error = msg.length ? msg : ("voxtype transcribe failed (" + exitCode + ")")
+        return
+      }
+      var text = String(transcribeOut.text || "").trim()
+      if (text.length) {
+        if (root.composerText.length)
+          root.composerText = root.composerText + (root.composerText.endsWith(" ") ? "" : " ") + text
+        else
+          root.composerText = text
+        root.transcriptReady(text)
+      }
     }
   }
 

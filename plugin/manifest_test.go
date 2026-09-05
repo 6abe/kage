@@ -113,6 +113,71 @@ func TestOverlayContract(t *testing.T) {
 	}
 }
 
+func TestA2Contracts(t *testing.T) {
+	dir := pluginDir(t)
+	service, err := os.ReadFile(filepath.Join(dir, "Service.qml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay, err := os.ReadFile(filepath.Join(dir, "Overlay.qml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"annotated.png",
+		"pw-record",
+		`"16000"`,
+		"--channels",
+		"voxtype",
+		"transcribe",
+		"function startRecording",
+		"function cancelRecording",
+		"function stopMic",
+		"function stopAndTranscribe",
+		"composerText",
+	} {
+		if !bytes.Contains(service, []byte(want)) {
+			t.Errorf("Service.qml missing %q", want)
+		}
+	}
+	if bytes.Contains(service, []byte("record start")) || bytes.Contains(service, []byte(`"record"`)) {
+		t.Error("Service.qml must not use voxtype record (type-mode injection)")
+	}
+	for _, want := range []string{
+		"TextArea",
+		"objectName: \"composer\"",
+		"recLight",
+		"cancelRecording",
+		"stopAndTranscribe",
+		"startRecording",
+		"stopMic",
+		"grabToImage",
+		"annotatedPath",
+		"markAnnotated",
+	} {
+		if !bytes.Contains(overlay, []byte(want)) {
+			t.Errorf("Overlay.qml missing %q", want)
+		}
+	}
+	for name, body := range map[string][]byte{"Service.qml": service, "Overlay.qml": overlay} {
+		for _, banned := range [][]byte{
+			[]byte("grok agent"),
+			[]byte("session/prompt"),
+			[]byte("--prompt-json"),
+			[]byte("grim"),
+			[]byte("slurp"),
+			[]byte("omarchy screenshot"),
+		} {
+			if bytes.Contains(body, banned) {
+				t.Errorf("%s contains %q", name, banned)
+			}
+		}
+	}
+	if !bytes.Contains(overlay, []byte("!root.service.error")) {
+		t.Error("Overlay.qml must skip startRecording when grab failed")
+	}
+}
+
 func TestInstallNotes(t *testing.T) {
 	dir := pluginDir(t)
 	readme, err := os.ReadFile(filepath.Join(dir, "README.md"))

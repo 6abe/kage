@@ -1,6 +1,7 @@
 import Quickshell
 import Quickshell.Wayland
 import QtQuick
+import QtQuick.Controls
 import qs.Commons
 import qs.Ui
 
@@ -15,16 +16,21 @@ Item {
   property bool opened: false
   property bool summoning: false
   property string loadError: ""
+  property var strokes: []
+  property var currentStroke: []
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
   property color border: Color.menu.border
   property var borderSpec: Border.surfaceSpec("menu", "border", border, Math.max(1, Style.space(2)))
   property color scrim: Color.menu.scrim
+  property color accent: Color.accent
   readonly property int cornerRadius: Style.cornerRadius
   property string fontFamily: Style.font.menuFamily
   property int contentMargin: Style.spacing.panelPadding
   property int headerHeight: Math.max(Style.space(34), Style.font.title + Style.spacing.controlPaddingY * 2)
+  property int composerHeight: Math.max(Style.space(88), Style.font.body * 4)
+  property int toolbarHeight: Math.max(Style.space(36), Style.font.body + Style.spacing.controlPaddingY * 2)
   property int contentSpacing: Style.spacing.md
   property int cardWidth: panel.width - Style.gapsOut * 2
   property int cardHeight: panel.height - Style.gapsOut * 2
@@ -34,6 +40,7 @@ Item {
       return ""
     return Util.fileUrl(root.service.imagePath) + "?v=" + String(root.service.imageToken || "")
   }
+  readonly property bool recording: root.service && root.service.recording
   readonly property string statusText: {
     if (root.loadError.length)
       return root.loadError
@@ -41,6 +48,8 @@ Item {
       return root.service.error
     if (root.service && root.service.grabbing)
       return "Capturing…"
+    if (root.service && root.service.transcribing)
+      return "Transcribing…"
     return ""
   }
 
@@ -49,6 +58,8 @@ Item {
     root.loadError = ""
     root.opened = false
     root.summoning = true
+    root.strokes = []
+    root.currentStroke = []
     if (!root.service || typeof root.service.grab !== "function") {
       root.loadError = "kage.ask service is not loaded"
       root.opened = true
@@ -59,14 +70,54 @@ Item {
   }
 
   function close() {
+    if (root.service && typeof root.service.stopMic === "function")
+      root.service.stopMic()
     root.summoning = false
     root.opened = false
   }
 
   function dismiss() {
+    if (root.service && root.service.recording)
+      root.service.cancelRecording()
     root.close()
     if (root.shell && typeof root.shell.hide === "function")
       root.shell.hide((root.manifest && root.manifest.id) || "kage.ask")
+  }
+
+  function onRecClicked() {
+    if (!root.service)
+      return
+    if (root.service.recording) {
+      root.service.cancelRecording()
+      return
+    }
+    root.service.startRecording()
+  }
+
+  function onStopClicked() {
+    if (!root.service)
+      return
+    root.service.stopAndTranscribe()
+  }
+
+  function fittedRect(availW, availH, srcW, srcH) {
+    if (srcW <= 0 || srcH <= 0)
+      return { x: 0, y: 0, w: availW, h: availH }
+    var s = Math.min(availW / srcW, availH / srcH)
+    var w = Math.max(1, Math.floor(srcW * s))
+    var h = Math.max(1, Math.floor(srcH * s))
+    return { x: Math.floor((availW - w) / 2), y: Math.floor((availH - h) / 2), w: w, h: h }
+  }
+
+  function burnMarks() {
+    if (!root.service)
+      return
+    burnLayer.grabToImage(function(result) {
+      if (!result)
+        return
+      result.saveToFile(root.service.annotatedPath)
+      root.service.markAnnotated()
+    })
   }
 
   Connections {
@@ -76,7 +127,11 @@ Item {
         return
       root.summoning = false
       root.opened = true
-      Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+      Qt.callLater(function() {
+        keyCatcher.forceActiveFocus()
+        if (root.service && !root.service.error && typeof root.service.startRecording === "function")
+          root.service.startRecording()
+      })
     }
   }
 
@@ -143,7 +198,8 @@ Item {
           Text {
             textFormat: Text.PlainText
             anchors.left: parent.left
-            anchors.right: parent.right
+            anchors.right: recRow.left
+            anchors.rightMargin: root.contentSpacing
             anchors.verticalCenter: parent.verticalCenter
             text: "Kage ask"
             color: root.foreground
@@ -151,20 +207,131 @@ Item {
             font.pixelSize: Style.font.heading
             elide: Text.ElideRight
           }
+
+          Row {
+            id: recRow
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: root.contentSpacing
+
+            Rectangle {
+              id: recLight
+              width: Style.space(12)
+              height: Style.space(12)
+              radius: width / 2
+              anchors.verticalCenter: parent.verticalCenter
+              color: root.recording ? "#e23d28" : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.25)
+              visible: true
+            }
+
+            Button {
+              text: root.recording ? "Rec again" : "Rec"
+              foreground: root.foreground
+              accent: root.accent
+              bordered: true
+              onClicked: root.onRecClicked()
+            }
+
+            Button {
+              text: "Stop"
+              visible: root.recording
+              foreground: root.foreground
+              accent: root.accent
+              bordered: true
+              onClicked: root.onStopClicked()
+            }
+          }
         }
 
         Item {
+          id: stageHost
           width: parent.width
-          height: parent.height - root.headerHeight - root.contentSpacing
+          height: parent.height - root.headerHeight - root.composerHeight - root.contentSpacing * 2
+
+          readonly property var srcSize: {
+            var snap = root.service && root.service.snapshot
+            if (snap && snap.width && snap.height)
+              return { w: snap.width, h: snap.height }
+            return { w: 16, h: 9 }
+          }
+          readonly property var fit: root.fittedRect(width, height, srcSize.w, srcSize.h)
 
           Image {
-            anchors.fill: parent
-            visible: root.imageUrl.length > 0 && root.statusText.length === 0
+            visible: false
             source: root.imageUrl
-            fillMode: Image.PreserveAspectFit
-            asynchronous: true
-            cache: false
-            smooth: true
+          }
+
+          Item {
+            id: burnLayer
+            x: stageHost.fit.x
+            y: stageHost.fit.y
+            width: stageHost.fit.w
+            height: stageHost.fit.h
+
+            Image {
+              anchors.fill: parent
+              visible: root.imageUrl.length > 0 && root.statusText.length === 0
+              source: root.imageUrl
+              fillMode: Image.Stretch
+              asynchronous: true
+              cache: false
+              smooth: true
+            }
+
+            Canvas {
+              id: ink
+              anchors.fill: parent
+              renderTarget: Canvas.FramebufferObject
+              onPaint: {
+                var ctx = getContext("2d")
+                ctx.clearRect(0, 0, width, height)
+                ctx.strokeStyle = "#e23d28"
+                ctx.lineWidth = Math.max(3, width / 400)
+                ctx.lineCap = "round"
+                ctx.lineJoin = "round"
+                var all = root.strokes.slice()
+                if (root.currentStroke && root.currentStroke.length)
+                  all.push(root.currentStroke)
+                for (var s = 0; s < all.length; s++) {
+                  var pts = all[s]
+                  if (!pts || pts.length < 2)
+                    continue
+                  ctx.beginPath()
+                  ctx.moveTo(pts[0].x * width, pts[0].y * height)
+                  for (var i = 1; i < pts.length; i++)
+                    ctx.lineTo(pts[i].x * width, pts[i].y * height)
+                  ctx.stroke()
+                }
+              }
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              acceptedButtons: Qt.LeftButton
+              preventStealing: true
+              onPressed: function(mouse) {
+                root.currentStroke = [{ x: mouse.x / width, y: mouse.y / height }]
+                ink.requestPaint()
+              }
+              onPositionChanged: function(mouse) {
+                if (!pressed)
+                  return
+                var pts = root.currentStroke.slice()
+                pts.push({ x: mouse.x / Math.max(1, width), y: mouse.y / Math.max(1, height) })
+                root.currentStroke = pts
+                ink.requestPaint()
+              }
+              onReleased: function() {
+                if (root.currentStroke && root.currentStroke.length > 1) {
+                  var next = root.strokes.slice()
+                  next.push(root.currentStroke)
+                  root.strokes = next
+                }
+                root.currentStroke = []
+                ink.requestPaint()
+                root.burnMarks()
+              }
+            }
           }
 
           Text {
@@ -179,6 +346,40 @@ Item {
             font.pixelSize: Style.font.title
             wrapMode: Text.Wrap
             horizontalAlignment: Text.AlignHCenter
+          }
+        }
+
+        Rectangle {
+          width: parent.width
+          height: root.composerHeight
+          radius: root.cornerRadius
+          color: Style.controlFill(composer.activeFocus, false, root.foreground, root.accent)
+          border.color: root.border
+          border.width: Math.max(1, Style.space(1))
+
+          TextArea {
+            id: composer
+            objectName: "composer"
+            anchors.fill: parent
+            anchors.margins: Style.spacing.controlPaddingX
+            wrapMode: TextEdit.Wrap
+            textFormat: TextEdit.PlainText
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            color: root.foreground
+            placeholderText: "Talk or type. Nothing is sent yet."
+            text: root.service ? root.service.composerText : ""
+            onTextChanged: {
+              if (root.service)
+                root.service.composerText = text
+            }
+            background: Item {}
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Escape) {
+                root.dismiss()
+                event.accepted = true
+              }
+            }
           }
         }
       }
