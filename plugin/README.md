@@ -27,7 +27,7 @@ omarchy-shell shell summon kage.ask '{"capture":"monitor"}'
 omarchy-shell shell hide kage.ask
 ```
 
-Esc hides the overlay. The service stays loaded.
+Esc hides the overlay. The service stays loaded. Send (button or Ctrl+Enter) creates or resumes a Grok session; the reply streams into the overlay. Voice does not auto-send.
 
 ## Bind
 
@@ -43,3 +43,5 @@ Unbind first if that chord is already mapped.
 ## Capture
 
 The overlay shells out to `kage see --path …`. It does not call grim, slurp, or `omarchy screenshot`. Snapshots land under `$XDG_RUNTIME_DIR/kage/ask/` at mode 0700.
+
+Send writes `prompt.txt`, then runs `grok -p --prompt-json --output-format streaming-json` with `--session-id` (first turn) or `--resume` (later). cwd is `$HOME`. Ask mode denies click/type/press/hotkey. The current session UUID is `~/.config/kage/ask-session`. Screenshots stay files; nothing is base64.

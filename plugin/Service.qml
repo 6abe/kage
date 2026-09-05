@@ -27,7 +27,14 @@ Item {
   readonly property string annotatedPath: issueDir + "/annotated.png"
   readonly property string annotatedTmpPath: issueDir + "/annotated.png.tmp"
   readonly property string snapshotJsonPath: issueDir + "/snapshot.json"
+  readonly property string promptTxtPath: issueDir + "/prompt.txt"
   readonly property string wavPath: issueDir + "/rec.wav"
+  readonly property string homeDir: {
+    var h = Quickshell.env("HOME")
+    return h && h.length ? h : "/home"
+  }
+  readonly property string configDir: homeDir + "/.config/kage"
+  readonly property string sessionFilePath: configDir + "/ask-session"
 
   property bool grabbing: false
   property bool recording: false
@@ -47,9 +54,19 @@ Item {
   property var snapshot: null
   property string error: ""
   property string composerText: ""
+  property bool sending: false
+  property string sessionId: ""
+  property var chatMessages: []
+  property string streamBuf: ""
+  property int sendGen: 0
+  property int grokJobGen: 0
+  property string pendingPromptJson: ""
+  property bool pendingResume: false
 
   signal grabFinished()
   signal transcriptReady(string text)
+  signal chatUpdated()
+  signal sendFinished()
 
   function grab(payloadJson) {
     root.grabbing = true
@@ -146,6 +163,117 @@ Item {
 
   function strokeWidth(w) {
     return Math.max(3, Math.round(w / 400))
+  }
+
+  function payloadImagePath() {
+    if (root.hasMarks && root.annotatedPath.length)
+      return root.annotatedPath
+    return root.rawPath
+  }
+
+  function appendChat(role, text) {
+    var next = root.chatMessages.slice()
+    next.push({ role: role, text: text })
+    root.chatMessages = next
+    root.chatUpdated()
+  }
+
+  function setLastAssistant(text) {
+    var next = root.chatMessages.slice()
+    if (next.length && next[next.length - 1].role === "assistant")
+      next[next.length - 1] = { role: "assistant", text: text }
+    else
+      next.push({ role: "assistant", text: text })
+    root.chatMessages = next
+    root.chatUpdated()
+  }
+
+  function persistSessionId(id) {
+    root.sessionId = id
+    ensureConfigProc.command = ["install", "-d", "-m", "0700", root.configDir]
+    ensureConfigProc.running = true
+  }
+
+  function buildPromptJson() {
+    var img = root.payloadImagePath()
+    var body = "Screenshot: " + img + "\nSnapshot JSON: " + root.snapshotJsonPath + "\n\n" + String(root.composerText || "")
+    return JSON.stringify([{ type: "text", text: body }])
+  }
+
+  function send() {
+    if (root.sending || grokProc.running)
+      return
+    if (!root.rawPath.length) {
+      root.error = "nothing to send"
+      return
+    }
+    stopMic()
+    root.error = ""
+    root.sending = true
+    root.sendGen += 1
+    root.streamBuf = ""
+    promptFile.setText(String(root.composerText || ""))
+    var userText = String(root.composerText || "")
+    appendChat("user", userText)
+    root.pendingPromptJson = root.buildPromptJson()
+    root.pendingResume = root.sessionId.length > 0
+    if (root.pendingResume) {
+      startGrok(root.sessionId, true)
+      return
+    }
+    uuidProc.command = ["uuidgen"]
+    uuidProc.running = true
+  }
+
+  function startGrok(id, resume) {
+    var cmd = [
+      "grok", "-p", ".",
+      "--prompt-json", root.pendingPromptJson,
+      "--output-format", "streaming-json",
+      "--cwd", root.homeDir,
+      "--deny", "click",
+      "--deny", "type",
+      "--deny", "press",
+      "--deny", "hotkey",
+      "--disallowed-tools", "kage__kage_click,kage__kage_type,kage__kage_press,kage__kage_hotkey"
+    ]
+    if (resume) {
+      cmd.push("--resume")
+      cmd.push(id)
+    } else {
+      cmd.push("--session-id")
+      cmd.push(id)
+    }
+    root.grokJobGen = root.sendGen
+    grokProc.workingDirectory = root.homeDir
+    grokProc.command = cmd
+    grokProc.running = true
+  }
+
+  function handleStreamLine(line) {
+    var s = String(line || "").trim()
+    if (!s.length)
+      return
+    var obj = null
+    try {
+      obj = JSON.parse(s)
+    } catch (e) {
+      return
+    }
+    if (!obj)
+      return
+    if (obj.sessionId && typeof obj.sessionId === "string" && obj.sessionId.length)
+      persistSessionId(obj.sessionId)
+    if (obj.session_id && typeof obj.session_id === "string" && obj.session_id.length)
+      persistSessionId(obj.session_id)
+    if (obj.type === "text" && obj.data != null)
+      root.streamBuf += String(obj.data)
+    else if (obj.type === "assistant" && obj.text)
+      root.streamBuf += String(obj.text)
+    else if (obj.delta && obj.delta.text)
+      root.streamBuf += String(obj.delta.text)
+    if (root.streamBuf.length)
+      setLastAssistant(root.streamBuf)
   }
 
   function burnMarks(strokes) {
@@ -365,5 +493,86 @@ Item {
     id: snapshotFile
     path: root.snapshotJsonPath
     printErrors: false
+  }
+
+  FileView {
+    id: promptFile
+    path: root.promptTxtPath
+    printErrors: false
+  }
+
+  FileView {
+    id: sessionFile
+    path: root.sessionFilePath
+    printErrors: false
+    watchChanges: true
+    onLoaded: function() {
+      var id = String(text() || "").trim()
+      if (id.length)
+        root.sessionId = id
+    }
+    onFileChanged: reload()
+    Component.onCompleted: reload()
+  }
+
+  Process {
+    id: ensureConfigProc
+    onExited: function(exitCode) {
+      if (exitCode !== 0)
+        return
+      sessionFile.setText(root.sessionId + "\n")
+    }
+  }
+
+  Process {
+    id: uuidProc
+    stdout: StdioCollector {
+      id: uuidOut
+      waitForEnd: true
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.sending = false
+        root.error = "uuidgen failed"
+        root.sendFinished()
+        return
+      }
+      var id = String(uuidOut.text || "").trim()
+      if (!id.length) {
+        root.sending = false
+        root.error = "uuidgen returned empty"
+        root.sendFinished()
+        return
+      }
+      persistSessionId(id)
+      startGrok(id, false)
+    }
+  }
+
+  Process {
+    id: grokProc
+    stdout: SplitParser {
+      onRead: function(line) {
+        if (root.grokJobGen !== root.sendGen)
+          return
+        root.handleStreamLine(line)
+      }
+    }
+    stderr: StdioCollector {
+      id: grokErr
+      waitForEnd: true
+    }
+    onExited: function(exitCode) {
+      if (root.grokJobGen !== root.sendGen)
+        return
+      root.sending = false
+      if (exitCode !== 0 && !root.streamBuf.length) {
+        var msg = String(grokErr.text || "").trim()
+        root.error = msg.length ? msg : ("grok failed (" + exitCode + ")")
+      } else if (root.streamBuf.length) {
+        setLastAssistant(root.streamBuf)
+      }
+      root.sendFinished()
+    }
   }
 }

@@ -194,9 +194,6 @@ func TestA2Contracts(t *testing.T) {
 	}
 	for name, body := range map[string][]byte{"Service.qml": service, "Overlay.qml": overlay} {
 		for _, banned := range [][]byte{
-			[]byte("grok agent"),
-			[]byte("session/prompt"),
-			[]byte("--prompt-json"),
 			[]byte("grim"),
 			[]byte("slurp"),
 			[]byte("omarchy screenshot"),
@@ -460,6 +457,227 @@ func TestA2Contracts(t *testing.T) {
 	}
 	if !bytes.Contains(rmTmpTail[:rmTmpEnd+1], []byte("flushPendingBurn")) {
 		t.Error("rmTmpProc onExited must flushPendingBurn")
+	}
+}
+
+func TestA3Contracts(t *testing.T) {
+	dir := pluginDir(t)
+	service, err := os.ReadFile(filepath.Join(dir, "Service.qml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay, err := os.ReadFile(filepath.Join(dir, "Overlay.qml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"function send()",
+		"function startGrok(",
+		"function handleStreamLine(",
+		"function payloadImagePath()",
+		"function persistSessionId(",
+		"ask-session",
+		"--prompt-json",
+		"--output-format",
+		"streaming-json",
+		"--session-id",
+		"--resume",
+		"--cwd",
+		"homeDir",
+		"--deny",
+		"click",
+		"type",
+		"press",
+		"hotkey",
+		"--disallowed-tools",
+		"kage__kage_click",
+		"prompt.txt",
+		"promptTxtPath",
+		"uuidgen",
+		"id: grokProc",
+		"id: uuidProc",
+		"SplitParser",
+		"chatMessages",
+		"sending",
+		"streamBuf",
+		"setLastAssistant",
+		"appendChat",
+	} {
+		if !bytes.Contains(service, []byte(want)) {
+			t.Errorf("Service.qml missing %q", want)
+		}
+	}
+	for _, banned := range []string{
+		"--always-approve",
+		"--yolo",
+		"always-approve",
+		"base64",
+		"kage agent",
+	} {
+		if bytes.Contains(service, []byte(banned)) {
+			t.Errorf("Service.qml contains %q", banned)
+		}
+	}
+	if bytes.Contains(overlay, []byte("--always-approve")) || bytes.Contains(overlay, []byte("--yolo")) {
+		t.Error("Overlay.qml must not yolo desktop input")
+	}
+
+	sendIdx := bytes.Index(service, []byte("function send()"))
+	if sendIdx < 0 {
+		t.Fatal("missing send")
+	}
+	sendEnd := bytes.Index(service[sendIdx:], []byte("function startGrok("))
+	if sendEnd < 0 {
+		t.Fatal("send not followed by startGrok")
+	}
+	sendBody := service[sendIdx : sendIdx+sendEnd]
+	if !bytes.Contains(sendBody, []byte("stopMic()")) {
+		t.Error("send must stopMic")
+	}
+	if !bytes.Contains(sendBody, []byte("promptFile.setText")) {
+		t.Error("send must write prompt.txt")
+	}
+	if !bytes.Contains(sendBody, []byte("appendChat")) {
+		t.Error("send must append the user turn")
+	}
+	if bytes.Contains(sendBody, []byte("startGrok(")) && bytes.Index(sendBody, []byte("uuidProc")) < 0 {
+		t.Error("first send must uuidgen when no session")
+	}
+	if !bytes.Contains(sendBody, []byte("pendingResume")) {
+		t.Error("send must resume when sessionId is set")
+	}
+	if bytes.Contains(sendBody, []byte("grokProc.running = false")) {
+		t.Error("send must not kill an in-flight grok")
+	}
+
+	uuidIdx := bytes.Index(service, []byte("id: uuidProc"))
+	if uuidIdx < 0 {
+		t.Fatal("missing uuidProc")
+	}
+	uuidTail := service[uuidIdx:]
+	failIdx := bytes.Index(uuidTail, []byte("exitCode !== 0"))
+	if failIdx < 0 {
+		t.Fatal("uuidProc missing error path")
+	}
+	failRet := bytes.Index(uuidTail[failIdx:], []byte("return"))
+	if failRet < 0 {
+		t.Fatal("uuidProc fail path missing return")
+	}
+	uuidFail := uuidTail[failIdx : failIdx+failRet]
+	if !bytes.Contains(uuidFail, []byte("root.error")) {
+		t.Error("uuidgen fail must set root.error")
+	}
+	if !bytes.Contains(uuidFail, []byte("sending = false")) {
+		t.Error("uuidgen fail must clear sending")
+	}
+	if bytes.Contains(uuidFail, []byte("startGrok")) || bytes.Contains(uuidFail, []byte("persistSessionId")) {
+		t.Error("uuidgen fail must not start grok or persist a session")
+	}
+
+	grokIdx := bytes.Index(service, []byte("id: grokProc"))
+	if grokIdx < 0 {
+		t.Fatal("missing grokProc")
+	}
+	grokTail := service[grokIdx:]
+	if !bytes.Contains(grokTail, []byte("SplitParser")) {
+		t.Error("grok stdout must stream via SplitParser")
+	}
+	if bytes.Contains(grokTail, []byte("waitForEnd: true")) && bytes.Index(grokTail, []byte("id: grokErr")) > bytes.Index(grokTail, []byte("SplitParser")) {
+		// stderr collector may wait; stdout must not
+	}
+	stdoutSlice := grokTail
+	if sp := bytes.Index(stdoutSlice, []byte("stdout:")); sp >= 0 {
+		end := bytes.Index(stdoutSlice[sp:], []byte("stderr:"))
+		if end < 0 {
+			end = 400
+		}
+		stdoutBody := stdoutSlice[sp : sp+end]
+		if bytes.Contains(stdoutBody, []byte("waitForEnd: true")) {
+			t.Error("grok stdout must not waitForEnd before streaming")
+		}
+		if bytes.Contains(stdoutBody, []byte("StdioCollector")) {
+			t.Error("grok stdout must stream lines, not collect until exit")
+		}
+	}
+
+	startIdx := bytes.Index(service, []byte("function startGrok("))
+	startEnd := bytes.Index(service[startIdx:], []byte("function handleStreamLine("))
+	if startIdx < 0 || startEnd < 0 {
+		t.Fatal("startGrok bounds")
+	}
+	startBody := service[startIdx : startIdx+startEnd]
+	if !bytes.Contains(startBody, []byte(`"--cwd"`)) || !bytes.Contains(startBody, []byte("root.homeDir")) {
+		t.Error("grok cwd must be $HOME")
+	}
+	if bytes.Contains(startBody, []byte("git")) {
+		t.Error("must not guess a repo cwd")
+	}
+	if !bytes.Contains(startBody, []byte(`"-p"`)) {
+		t.Error("bootstrap grok must pass -p")
+	}
+
+	payloadIdx := bytes.Index(service, []byte("function payloadImagePath()"))
+	payloadEnd := bytes.Index(service[payloadIdx:], []byte("function appendChat("))
+	if payloadIdx < 0 || payloadEnd < 0 {
+		t.Fatal("payloadImagePath bounds")
+	}
+	payloadBody := service[payloadIdx : payloadIdx+payloadEnd]
+	if !bytes.Contains(payloadBody, []byte("hasMarks")) || !bytes.Contains(payloadBody, []byte("annotatedPath")) {
+		t.Error("send must prefer annotated.png when marks exist")
+	}
+	if !bytes.Contains(payloadBody, []byte("rawPath")) {
+		t.Error("send must fall back to raw.png")
+	}
+
+	buildIdx := bytes.Index(service, []byte("function buildPromptJson()"))
+	if buildIdx < 0 {
+		t.Fatal("missing buildPromptJson")
+	}
+	buildEnd := bytes.Index(service[buildIdx:], []byte("function send()"))
+	if buildEnd < 0 {
+		t.Fatal("buildPromptJson bounds")
+	}
+	buildBody := service[buildIdx : buildIdx+buildEnd]
+	if !bytes.Contains(buildBody, []byte("snapshotJsonPath")) {
+		t.Error("prompt-json must include snapshot.json path")
+	}
+	if bytes.Contains(buildBody, []byte("readFile")) || bytes.Contains(bytes.ToLower(buildBody), []byte("base64")) {
+		t.Error("must not base64 the screenshot")
+	}
+
+	closeIdx := bytes.Index(overlay, []byte("function close()"))
+	closeEnd := bytes.Index(overlay[closeIdx:], []byte("function dismiss()"))
+	if closeIdx < 0 || closeEnd < 0 {
+		t.Fatal("close bounds")
+	}
+	closeBody := overlay[closeIdx : closeIdx+closeEnd]
+	if bytes.Contains(closeBody, []byte("grokProc.running = false")) {
+		t.Error("Esc/close must not kill the grok process")
+	}
+
+	for _, want := range []string{
+		"function onSendClicked()",
+		"objectName: \"send\"",
+		"objectName: \"chatPane\"",
+		"ControlModifier",
+		"chatMessages",
+	} {
+		if !bytes.Contains(overlay, []byte(want)) {
+			t.Errorf("Overlay.qml missing %q", want)
+		}
+	}
+	composerKeys := bytes.Index(overlay, []byte("id: composer"))
+	if composerKeys < 0 {
+		t.Fatal("missing composer")
+	}
+	keys := overlay[composerKeys:]
+	ret := bytes.Index(keys, []byte("Qt.Key_Return"))
+	if ret < 0 {
+		t.Fatal("composer must handle Return")
+	}
+	retBody := keys[ret : ret+400]
+	if !bytes.Contains(retBody, []byte("ControlModifier")) {
+		t.Error("Send on Return must require Ctrl")
 	}
 }
 

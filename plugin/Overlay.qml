@@ -30,6 +30,7 @@ Item {
   property int contentMargin: Style.spacing.panelPadding
   property int headerHeight: Math.max(Style.space(34), Style.font.title + Style.spacing.controlPaddingY * 2)
   property int composerHeight: Math.max(Style.space(88), Style.font.body * 4)
+  property int chatMinWidth: Style.space(280)
   property int contentSpacing: Style.spacing.md
   property int cardWidth: panel.width - Style.gapsOut * 2
   property int cardHeight: panel.height - Style.gapsOut * 2
@@ -59,6 +60,8 @@ Item {
       return "Capturing…"
     if (root.service && root.service.transcribing)
       return "Transcribing…"
+    if (root.service && root.service.sending)
+      return "Sending…"
     return ""
   }
 
@@ -107,6 +110,15 @@ Item {
     if (!root.service)
       return
     root.service.stopAndTranscribe()
+  }
+
+  function onSendClicked() {
+    if (!root.service || typeof root.service.send !== "function")
+      return
+    if (root.service.sending)
+      return
+    root.service.composerText = composer.text
+    root.service.send()
   }
 
   function fittedRect(availW, availH, srcW, srcH) {
@@ -163,6 +175,12 @@ Item {
       })
     }
     function onTranscriptReady(text) {
+      composer.text = root.service.composerText
+    }
+    function onChatUpdated() {
+      chatFlick.contentY = Math.max(0, chatFlick.contentHeight - chatFlick.height)
+    }
+    function onSendFinished() {
       composer.text = root.service.composerText
     }
   }
@@ -280,13 +298,26 @@ Item {
           width: parent.width
           height: parent.height - root.headerHeight - root.composerHeight - root.contentSpacing * 2
 
+          readonly property bool sideChat: width >= height * 1.6
+          readonly property int chatW: sideChat ? Math.max(root.chatMinWidth, Math.floor(width * 0.32)) : width
+          readonly property int imageW: sideChat ? width - chatW - root.contentSpacing : width
+          readonly property int imageH: sideChat ? height : Math.floor(height * 0.62)
+          readonly property int chatH: sideChat ? height : height - imageH - root.contentSpacing
+
           readonly property var srcSize: {
             var snap = root.service && root.service.snapshot
             if (snap && snap.width && snap.height)
               return { w: snap.width, h: snap.height }
             return { w: 16, h: 9 }
           }
-          readonly property var fit: root.fittedRect(width, height, srcSize.w, srcSize.h)
+          readonly property var fit: root.fittedRect(imageW, imageH, srcSize.w, srcSize.h)
+
+          Item {
+            id: imagePane
+            x: 0
+            y: 0
+            width: stageHost.imageW
+            height: stageHost.imageH
 
           Item {
             id: viewLayer
@@ -370,38 +401,105 @@ Item {
               horizontalAlignment: Text.AlignHCenter
             }
           }
-        }
+          }
 
-        Rectangle {
-          width: parent.width
-          height: root.composerHeight
-          radius: root.cornerRadius
-          color: Style.controlFill(composer.activeFocus, false, root.foreground, root.accent)
-          border.color: root.border
-          border.width: Math.max(1, Style.space(1))
+          Rectangle {
+            id: chatPane
+            objectName: "chatPane"
+            x: stageHost.sideChat ? stageHost.imageW + root.contentSpacing : 0
+            y: stageHost.sideChat ? 0 : stageHost.imageH + root.contentSpacing
+            width: stageHost.chatW
+            height: stageHost.chatH
+            radius: root.cornerRadius
+            color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.04)
+            border.color: root.border
+            border.width: Math.max(1, Style.space(1))
 
-          TextArea {
-            id: composer
-            objectName: "composer"
-            anchors.fill: parent
-            anchors.margins: Style.spacing.controlPaddingX
-            wrapMode: TextEdit.Wrap
-            textFormat: TextEdit.PlainText
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            color: root.foreground
-            placeholderText: "Talk or type. Nothing is sent yet."
-            onTextChanged: {
-              if (root.service)
-                root.service.composerText = text
-            }
-            background: Item {}
-            Keys.onPressed: function(event) {
-              if (event.key === Qt.Key_Escape) {
-                root.dismiss()
-                event.accepted = true
+            Flickable {
+              id: chatFlick
+              anchors.fill: parent
+              anchors.margins: Style.spacing.controlPaddingX
+              clip: true
+              contentWidth: width
+              contentHeight: chatCol.height
+              boundsBehavior: Flickable.StopAtBounds
+
+              Column {
+                id: chatCol
+                width: chatFlick.width
+                spacing: root.contentSpacing
+
+                Repeater {
+                  model: root.service ? root.service.chatMessages : []
+                  delegate: Text {
+                    width: chatCol.width
+                    textFormat: Text.PlainText
+                    wrapMode: Text.Wrap
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    text: (modelData.role === "user" ? "You: " : "Grok: ") + String(modelData.text || "")
+                  }
+                }
               }
             }
+          }
+        }
+
+        Row {
+          width: parent.width
+          height: root.composerHeight
+          spacing: root.contentSpacing
+
+          Rectangle {
+            width: parent.width - sendBtn.width - root.contentSpacing
+            height: parent.height
+            radius: root.cornerRadius
+            color: Style.controlFill(composer.activeFocus, false, root.foreground, root.accent)
+            border.color: root.border
+            border.width: Math.max(1, Style.space(1))
+
+            TextArea {
+              id: composer
+              objectName: "composer"
+              anchors.fill: parent
+              anchors.margins: Style.spacing.controlPaddingX
+              wrapMode: TextEdit.Wrap
+              textFormat: TextEdit.PlainText
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              color: root.foreground
+              placeholderText: "Talk or type. Nothing is sent yet."
+              onTextChanged: {
+                if (root.service)
+                  root.service.composerText = text
+              }
+              background: Item {}
+              Keys.onPressed: function(event) {
+                if (event.key === Qt.Key_Escape) {
+                  root.dismiss()
+                  event.accepted = true
+                  return
+                }
+                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                  if (event.modifiers & Qt.ControlModifier) {
+                    root.onSendClicked()
+                    event.accepted = true
+                  }
+                }
+              }
+            }
+          }
+
+          Button {
+            id: sendBtn
+            objectName: "send"
+            text: "Send"
+            anchors.verticalCenter: parent.verticalCenter
+            foreground: root.foreground
+            accent: root.accent
+            bordered: true
+            onClicked: root.onSendClicked()
           }
         }
       }
