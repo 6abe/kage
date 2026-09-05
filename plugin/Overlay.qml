@@ -43,8 +43,11 @@ Item {
     return Util.fileUrl(root.service.rawPath) + "?v=" + String(root.service.imageToken || "")
   }
   readonly property bool recording: root.service && root.service.recording
+  readonly property bool grabReady: rawPreview.status === Image.Ready && burnSource.status === Image.Ready
   readonly property bool inkLocked: {
     if (!root.service)
+      return true
+    if (!root.grabReady)
       return true
     return root.service.grabbing || root.service.transcribing
   }
@@ -144,11 +147,11 @@ Item {
     var h = snap.height || 0
     if (w <= 0 || h <= 0)
       return
-    if (rawPreview.status !== Image.Ready)
-      return
     root.pendingBurn = true
     burnCanvas.width = w
     burnCanvas.height = h
+    if (burnSource.status !== Image.Ready)
+      return
     burnCanvas.requestPaint()
   }
 
@@ -325,7 +328,7 @@ Item {
               anchors.fill: parent
               acceptedButtons: Qt.LeftButton
               preventStealing: true
-              enabled: !root.inkLocked && root.imageUrl.length > 0
+              enabled: !root.inkLocked
               onPressed: function(mouse) {
                 root.currentStroke = [{ x: mouse.x / Math.max(1, width), y: mouse.y / Math.max(1, height) }]
                 ink.requestPaint()
@@ -411,6 +414,20 @@ Item {
     }
   }
 
+  Image {
+    id: burnSource
+    visible: false
+    asynchronous: true
+    cache: false
+    source: root.imageUrl
+    sourceSize.width: (root.service && root.service.snapshot && root.service.snapshot.width) ? root.service.snapshot.width : 0
+    sourceSize.height: (root.service && root.service.snapshot && root.service.snapshot.height) ? root.service.snapshot.height : 0
+    onStatusChanged: {
+      if (status === Image.Ready && root.pendingBurn)
+        burnCanvas.requestPaint()
+    }
+  }
+
   Canvas {
     id: burnCanvas
     visible: false
@@ -421,9 +438,11 @@ Item {
     onPaint: {
       if (!root.pendingBurn)
         return
+      if (burnSource.status !== Image.Ready)
+        return
       var ctx = getContext("2d")
       ctx.clearRect(0, 0, width, height)
-      ctx.drawImage(rawPreview, 0, 0, width, height)
+      ctx.drawImage(burnSource, 0, 0, width, height)
       root.paintStrokes(ctx, width, height)
       var path = root.service ? root.service.annotatedPath : ""
       root.pendingBurn = false

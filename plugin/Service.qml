@@ -32,6 +32,9 @@ Item {
   property bool recording: false
   property bool transcribing: false
   property bool transcribeWhenRecEnds: false
+  property bool recAfterTranscribe: false
+  property int wavGen: 0
+  property int transcribeGen: 0
   property bool hasMarks: false
   property string imagePath: ""
   property string imageToken: ""
@@ -58,10 +61,13 @@ Item {
   function startRecording() {
     if (root.recording || recProc.running)
       return
-    if (transcribeProc.running)
-      transcribeProc.running = false
-    root.transcribing = false
+    if (transcribeProc.running) {
+      root.recAfterTranscribe = true
+      return
+    }
+    root.recAfterTranscribe = false
     root.transcribeWhenRecEnds = false
+    root.wavGen += 1
     recProc.command = ["pw-record", "--rate", "16000", "--channels", "1", "--format", "s16", root.wavPath]
     recProc.running = true
     root.recording = true
@@ -76,6 +82,7 @@ Item {
 
   function cancelRecording() {
     root.transcribeWhenRecEnds = false
+    root.recAfterTranscribe = false
     root.recording = false
     root.transcribing = false
     if (transcribeProc.running)
@@ -107,6 +114,7 @@ Item {
   function beginTranscribe() {
     root.transcribeWhenRecEnds = false
     root.transcribing = true
+    root.transcribeGen = root.wavGen
     transcribeProc.command = ["voxtype", "transcribe", root.wavPath]
     transcribeProc.running = true
   }
@@ -190,19 +198,25 @@ Item {
     }
     onExited: function(exitCode) {
       root.transcribing = false
-      unlinkWav()
+      var ownWav = root.wavGen === root.transcribeGen && !recProc.running
+      if (ownWav)
+        unlinkWav()
       if (exitCode !== 0) {
         var msg = String(transcribeErr.text || transcribeOut.text || "").trim()
         root.error = msg.length ? msg : ("voxtype transcribe failed (" + exitCode + ")")
-        return
+      } else {
+        var text = String(transcribeOut.text || "").trim()
+        if (text.length) {
+          if (root.composerText.length)
+            root.composerText = root.composerText + (root.composerText.endsWith(" ") ? "" : " ") + text
+          else
+            root.composerText = text
+          root.transcriptReady(text)
+        }
       }
-      var text = String(transcribeOut.text || "").trim()
-      if (text.length) {
-        if (root.composerText.length)
-          root.composerText = root.composerText + (root.composerText.endsWith(" ") ? "" : " ") + text
-        else
-          root.composerText = text
-        root.transcriptReady(text)
+      if (root.recAfterTranscribe) {
+        root.recAfterTranscribe = false
+        startRecording()
       }
     }
   }

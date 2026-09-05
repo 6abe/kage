@@ -166,7 +166,11 @@ func TestA2Contracts(t *testing.T) {
 		"annotatedPath",
 		"markAnnotated",
 		"inkLocked",
+		"grabReady",
+		"burnSource",
+		"sourceSize",
 		"onTranscriptReady",
+		"pendingBurn",
 	} {
 		if !bytes.Contains(overlay, []byte(want)) {
 			t.Errorf("Overlay.qml missing %q", want)
@@ -252,6 +256,24 @@ func TestA2Contracts(t *testing.T) {
 	}
 	if !bytes.Contains(transBody, []byte("unlinkWav()")) {
 		t.Error("transcribeProc must unlink wav including on failure")
+	}
+	if !bytes.Contains(transBody, []byte("recProc.running")) || !bytes.Contains(transBody, []byte("wavGen")) {
+		t.Error("transcribeProc must skip unlinkWav when a new rec owns rec.wav")
+	}
+	startIdx := bytes.Index(service, []byte("function startRecording()"))
+	startEnd := bytes.Index(service[startIdx:], []byte("function unlinkWav()"))
+	if startIdx < 0 || startEnd < 0 {
+		t.Fatal("startRecording body bounds")
+	}
+	startBody := service[startIdx : startIdx+startEnd]
+	if bytes.Contains(startBody, []byte("transcribeProc.running = false")) {
+		t.Error("startRecording must not abort transcribe onto the same wav")
+	}
+	if !bytes.Contains(startBody, []byte("recAfterTranscribe")) {
+		t.Error("startRecording must wait for transcribe before a new rec")
+	}
+	if bytes.Contains(overlay, []byte("drawImage(rawPreview")) {
+		t.Error("burn must not stretch the fitted preview; use burnSource at snapshot size")
 	}
 }
 
