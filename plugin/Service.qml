@@ -38,6 +38,8 @@ Item {
   property int transcribeGen: 0
   property int burnGen: 0
   property int burnJobGen: 0
+  property int grabGen: 0
+  property int unlinkJobGen: 0
   property var pendingStrokes: null
   property bool hasMarks: false
   property string imagePath: ""
@@ -55,6 +57,7 @@ Item {
     root.hasMarks = false
     root.pendingStrokes = null
     root.burnGen += 1
+    root.grabGen += 1
     stopMic()
     if (burnProc.running)
       burnProc.running = false
@@ -152,7 +155,7 @@ Item {
     if (w <= 0 || h <= 0)
       return
     var list = strokes || []
-    if (burnProc.running || mvBurnProc.running) {
+    if (burnProc.running || mvBurnProc.running || rmAnnotatedProc.running || rmTmpProc.running) {
       root.pendingStrokes = list
       return
     }
@@ -219,8 +222,8 @@ Item {
       waitForEnd: true
     }
     onExited: function(exitCode) {
-      root.grabbing = false
       if (exitCode !== 0) {
+        root.grabbing = false
         var msg = String(seeErr.text || seeOut.text || "").trim()
         root.error = msg.length ? msg : ("kage see failed (" + exitCode + ")")
         root.grabFinished()
@@ -233,6 +236,7 @@ Item {
         snap = null
       }
       if (!snap || !snap.path) {
+        root.grabbing = false
         root.error = "kage see returned no path"
         root.grabFinished()
         return
@@ -241,8 +245,8 @@ Item {
       root.imagePath = snap.path
       root.imageToken = Date.now().toString()
       snapshotFile.setText(JSON.stringify(snap, null, 2) + "\n")
+      root.unlinkJobGen = root.grabGen
       unlinkAnnotated()
-      root.grabFinished()
     }
   }
 
@@ -299,6 +303,13 @@ Item {
 
   Process {
     id: rmAnnotatedProc
+    onExited: function() {
+      if (root.unlinkJobGen !== root.grabGen)
+        return
+      root.grabbing = false
+      root.grabFinished()
+      flushPendingBurn()
+    }
   }
 
   Process {
