@@ -428,8 +428,8 @@ func TestA2Contracts(t *testing.T) {
 		rmEnd = len(rmTail) - 1
 	}
 	rmBody := rmTail[:rmEnd+1]
-	if !bytes.Contains(rmBody, []byte("grabFinished")) {
-		t.Error("rmAnnotatedProc onExited must grabFinished after unlink")
+	if !bytes.Contains(rmBody, []byte("captureDone")) && !bytes.Contains(rmBody, []byte("grabFinished")) {
+		t.Error("rmAnnotatedProc onExited must finish the grab after unlink")
 	}
 	unlinkFn := bytes.Index(service, []byte("function unlinkAnnotated()"))
 	if unlinkFn < 0 {
@@ -873,6 +873,273 @@ func TestA3Contracts(t *testing.T) {
 	}
 }
 
+func TestA4Contracts(t *testing.T) {
+	dir := pluginDir(t)
+	service, err := os.ReadFile(filepath.Join(dir, "Service.qml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay, err := os.ReadFile(filepath.Join(dir, "Overlay.qml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme, err := os.ReadFile(filepath.Join(dir, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{
+		"function parseCapture(",
+		"function focusedAddress(",
+		"function startSee(",
+		"captureMode",
+		"grabSeq",
+		"grabTag",
+		"payloadMaxChars",
+		`"kage", "windows"`,
+		`"--window"`,
+		`"/raw"`,
+		"id: windowsProc",
+		"no focused window",
+		"dirJobGen",
+		"windowsJobGen",
+		"seeJobGen",
+		"function isWindowAddress(",
+		"function captureBusy(",
+		"function startGrabPipeline(",
+		"function captureDone(",
+		"pendingGrab",
+	} {
+		if !bytes.Contains(service, []byte(want)) {
+			t.Errorf("Service.qml missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"function grab(",
+		"function beginCapture(",
+		"function recapturePayload(",
+		"function bindService(",
+		"property bool capturing",
+		"text: \"Recapture\"",
+		"root.beginCapture(payloadJson)",
+	} {
+		if !bytes.Contains(overlay, []byte(want)) {
+			t.Errorf("Overlay.qml missing %q", want)
+		}
+	}
+	if bytes.Contains(overlay, []byte("function toggle(")) {
+		t.Error("Overlay.qml must not toggle; summon recaptures")
+	}
+	if bytes.Contains(overlay, []byte("shell.toggle")) {
+		t.Error("Overlay.qml must not call shell.toggle")
+	}
+
+	parseIdx := bytes.Index(service, []byte("function parseCapture("))
+	parseEnd := bytes.Index(service[parseIdx:], []byte("function focusedAddress("))
+	if parseIdx < 0 || parseEnd < 0 {
+		t.Fatal("parseCapture bounds")
+	}
+	parseBody := service[parseIdx : parseIdx+parseEnd]
+	if !bytes.Contains(parseBody, []byte(`obj.capture === "window"`)) {
+		t.Error("parseCapture must honor capture window")
+	}
+	if !bytes.Contains(parseBody, []byte(`return "monitor"`)) {
+		t.Error("parseCapture default is monitor")
+	}
+	if bytes.Contains(parseBody, []byte("fresh")) {
+		t.Error("parseCapture must not implement fresh:true")
+	}
+	if !bytes.Contains(parseBody, []byte("payloadMaxChars")) {
+		t.Error("parseCapture must bound payload size")
+	}
+
+	addrIdx := bytes.Index(service, []byte("function focusedAddress("))
+	addrEnd := bytes.Index(service[addrIdx:], []byte("function startSee("))
+	if addrIdx < 0 || addrEnd < 0 {
+		t.Fatal("focusedAddress bounds")
+	}
+	addrBody := service[addrIdx : addrIdx+addrEnd]
+	if !bytes.Contains(addrBody, []byte("w.focus")) {
+		t.Error("focusedAddress must use the focused client")
+	}
+	if !bytes.Contains(addrBody, []byte("isWindowAddress")) {
+		t.Error("focusedAddress must accept only 0x addresses from kage windows")
+	}
+
+	seeFn := bytes.Index(service, []byte("function startSee("))
+	seeFnEnd := bytes.Index(service[seeFn:], []byte("function grab("))
+	if seeFn < 0 || seeFnEnd < 0 {
+		t.Fatal("startSee bounds")
+	}
+	startSeeBody := service[seeFn : seeFn+seeFnEnd]
+	if !bytes.Contains(startSeeBody, []byte(`["kage", "see"]`)) {
+		t.Error("startSee must invoke kage see as argv")
+	}
+	if bytes.Contains(startSeeBody, []byte(`"sh"`)) || bytes.Contains(startSeeBody, []byte(`"-c"`)) {
+		t.Error("startSee must not wrap kage see in sh -c")
+	}
+	if !bytes.Contains(startSeeBody, []byte(`"--window"`)) {
+		t.Error("startSee must pass --window as its own argv")
+	}
+	if !bytes.Contains(startSeeBody, []byte("windowAddr")) {
+		t.Error("startSee must take the focused address")
+	}
+
+	grabIdx := bytes.Index(service, []byte("function grab("))
+	grabEnd := bytes.Index(service[grabIdx:], []byte("function startRecording()"))
+	if grabIdx < 0 || grabEnd < 0 {
+		t.Fatal("grab bounds")
+	}
+	grabBody := service[grabIdx : grabIdx+grabEnd]
+	if !bytes.Contains(grabBody, []byte("parseCapture")) {
+		t.Error("grab must parse the capture payload")
+	}
+	pipeIdx := bytes.Index(service, []byte("function startGrabPipeline("))
+	pipeEnd := bytes.Index(service[pipeIdx:], []byte("function captureDone("))
+	if pipeIdx < 0 || pipeEnd < 0 {
+		t.Fatal("startGrabPipeline bounds")
+	}
+	pipeBody := service[pipeIdx : pipeIdx+pipeEnd]
+	if !bytes.Contains(pipeBody, []byte("grabSeq")) {
+		t.Error("startGrabPipeline must bump grabSeq so later PNGs are not overwritten")
+	}
+	if bytes.Contains(grabBody, []byte("sessionId")) {
+		t.Error("grab must not touch the Grok session id")
+	}
+	if bytes.Contains(grabBody, []byte("chatMessages")) {
+		t.Error("grab must leave old thread messages in place")
+	}
+	if bytes.Contains(grabBody, []byte("hyprctl")) {
+		t.Error("grab must not call hyprctl; use kage windows")
+	}
+	if bytes.Contains(grabBody, []byte("seeProc.running = false")) {
+		t.Error("grab must not kill an in-flight kage see; grim children wedge screencopy")
+	}
+	if !bytes.Contains(grabBody, []byte("pendingGrab")) {
+		t.Error("grab must queue a recapture while the current see is still running")
+	}
+
+	winIdx := bytes.Index(service, []byte("id: windowsProc"))
+	if winIdx < 0 {
+		t.Fatal("missing windowsProc")
+	}
+	winEnd := bytes.Index(service[winIdx:], []byte("id: seeProc"))
+	if winEnd < 0 {
+		t.Fatal("windowsProc not followed by seeProc")
+	}
+	winBody := service[winIdx : winIdx+winEnd]
+	if !bytes.Contains(winBody, []byte("focusedAddress")) {
+		t.Error("windowsProc must parse the focused client")
+	}
+	if !bytes.Contains(winBody, []byte("startSee(addr)")) {
+		t.Error("windowsProc must pass the focused address to kage see --window")
+	}
+	if bytes.Contains(winBody, []byte("startSee(\"\")")) {
+		t.Error("window capture must not call kage see without --window")
+	}
+
+	seeProcIdx := bytes.Index(service, []byte("id: seeProc"))
+	seeProcEnd := bytes.Index(service[seeProcIdx:], []byte("id: recProc"))
+	if seeProcIdx < 0 || seeProcEnd < 0 {
+		t.Fatal("seeProc bounds")
+	}
+	seeProcBody := service[seeProcIdx : seeProcIdx+seeProcEnd]
+	if !bytes.Contains(seeProcBody, []byte("seeJobGen")) {
+		t.Error("seeProc must ignore superseded kage see jobs")
+	}
+	if !bytes.Contains(seeProcBody, []byte("unlinkAnnotated()")) {
+		t.Error("successful grab must still unlink leftover annotated.png")
+	}
+
+	dirIdx := bytes.Index(service, []byte("id: ensureDirProc"))
+	dirEnd := bytes.Index(service[dirIdx:], []byte("id: windowsProc"))
+	if dirIdx < 0 || dirEnd < 0 {
+		t.Fatal("ensureDirProc bounds")
+	}
+	dirBody := service[dirIdx : dirIdx+dirEnd]
+	if !bytes.Contains(dirBody, []byte(`captureMode === "window"`)) {
+		t.Error("ensureDir must branch to kage windows for capture window")
+	}
+	if !bytes.Contains(dirBody, []byte(`startSee("")`)) {
+		t.Error("monitor capture must call kage see without --window")
+	}
+
+	openIdx := bytes.Index(overlay, []byte("function open("))
+	openEnd := bytes.Index(overlay[openIdx:], []byte("function grab("))
+	if openIdx < 0 || openEnd < 0 {
+		t.Fatal("open bounds")
+	}
+	openBody := overlay[openIdx : openIdx+openEnd]
+	if !bytes.Contains(openBody, []byte("beginCapture")) {
+		t.Error("open must recapture rather than toggle")
+	}
+	if bytes.Contains(openBody, []byte("shell.hide")) {
+		t.Error("open/summon must not hide via shell.hide")
+	}
+
+	grabOv := bytes.Index(overlay, []byte("function grab("))
+	grabOvEnd := bytes.Index(overlay[grabOv:], []byte("function close()"))
+	if grabOv < 0 || grabOvEnd < 0 {
+		t.Fatal("overlay grab bounds")
+	}
+	grabOvBody := overlay[grabOv : grabOv+grabOvEnd]
+	if !bytes.Contains(grabOvBody, []byte("beginCapture")) {
+		t.Error("overlay grab must recapture through beginCapture")
+	}
+
+	finIdx := bytes.Index(overlay, []byte("function onGrabFinished()"))
+	finEnd := bytes.Index(overlay[finIdx:], []byte("function onTranscriptReady"))
+	if finIdx < 0 || finEnd < 0 {
+		t.Fatal("onGrabFinished bounds")
+	}
+	finBody := overlay[finIdx : finIdx+finEnd]
+	if !bytes.Contains(finBody, []byte("startRecording")) {
+		t.Error("recapture must start the mic again")
+	}
+	if !bytes.Contains(finBody, []byte("!root.service.error")) {
+		t.Error("recapture must skip the mic when grab failed")
+	}
+
+	recap := bytes.Index(overlay, []byte("text: \"Recapture\""))
+	if recap < 0 {
+		t.Fatal("missing Recapture control")
+	}
+	recapBody := overlay[recap : recap+400]
+	if !bytes.Contains(recapBody, []byte("root.grab(")) {
+		t.Error("Recapture must call overlay grab")
+	}
+	if bytes.Contains(recapBody, []byte(".send(")) {
+		t.Error("Recapture must not send")
+	}
+
+	for _, want := range []string{
+		"SUPER + SHIFT + W",
+		`{"capture":"window"}`,
+		"shell call kage.ask grab",
+		"raw-2.png",
+	} {
+		if !bytes.Contains(readme, []byte(want)) {
+			t.Errorf("README.md missing %q", want)
+		}
+	}
+	if bytes.Contains(readme, []byte("shell toggle kage.ask")) {
+		t.Error("README.md must not suggest toggle")
+	}
+	for name, body := range map[string][]byte{"Service.qml": service, "Overlay.qml": overlay} {
+		for _, banned := range [][]byte{
+			[]byte("grim"),
+			[]byte("slurp"),
+			[]byte("omarchy screenshot"),
+			[]byte("tensaku"),
+			[]byte("hyprctl"),
+		} {
+			if bytes.Contains(body, banned) {
+				t.Errorf("%s contains %q", name, banned)
+			}
+		}
+	}
+}
+
 func TestInstallNotes(t *testing.T) {
 	dir := pluginDir(t)
 	readme, err := os.ReadFile(filepath.Join(dir, "README.md"))
@@ -884,6 +1151,7 @@ func TestInstallNotes(t *testing.T) {
 		"rescanPlugins",
 		"omarchy plugin enable kage.ask",
 		"SUPER + SHIFT + A",
+		"SUPER + SHIFT + W",
 		"omarchy-shell shell summon kage.ask",
 		"PRINT",
 	} {

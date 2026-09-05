@@ -23,10 +23,12 @@ Item {
   readonly property string askRoot: kageDir + "/ask"
   property string issueId: "current"
   readonly property string issueDir: askRoot + "/" + issueId
-  readonly property string rawPath: issueDir + "/raw.png"
-  readonly property string annotatedPath: issueDir + "/annotated.png"
-  readonly property string annotatedTmpPath: issueDir + "/annotated.png.tmp"
-  readonly property string snapshotJsonPath: issueDir + "/snapshot.json"
+  property int grabSeq: 0
+  readonly property string grabTag: grabSeq <= 1 ? "" : ("-" + grabSeq)
+  readonly property string rawPath: issueDir + "/raw" + grabTag + ".png"
+  readonly property string annotatedPath: issueDir + "/annotated" + grabTag + ".png"
+  readonly property string annotatedTmpPath: issueDir + "/annotated" + grabTag + ".png.tmp"
+  readonly property string snapshotJsonPath: issueDir + "/snapshot" + grabTag + ".json"
   readonly property string promptTxtPath: issueDir + "/prompt.txt"
   readonly property string grokErrPath: issueDir + "/grok.err"
   readonly property string wavPath: issueDir + "/rec.wav"
@@ -48,7 +50,12 @@ Item {
   property int burnGen: 0
   property int burnJobGen: 0
   property int grabGen: 0
+  property int dirJobGen: 0
+  property int windowsJobGen: 0
+  property int seeJobGen: 0
   property int unlinkJobGen: 0
+  property string captureMode: "monitor"
+  readonly property int payloadMaxChars: 4096
   property var pendingStrokes: null
   property bool hasMarks: false
   property string imagePath: ""
@@ -68,11 +75,103 @@ Item {
   property bool startGrokAfterPersist: false
   property int persistJobGen: 0
   property int uuidJobGen: 0
+  property bool pendingGrab: false
 
   signal grabFinished()
   signal transcriptReady(string text)
   signal chatUpdated()
   signal sendFinished()
+
+  function parseCapture(payloadJson) {
+    var raw = String(payloadJson || "")
+    if (raw.length > root.payloadMaxChars)
+      raw = raw.substring(0, root.payloadMaxChars)
+    raw = raw.trim()
+    if (!raw.length)
+      return "monitor"
+    var obj = null
+    try {
+      obj = JSON.parse(raw)
+    } catch (e) {
+      return "monitor"
+    }
+    if (!obj || typeof obj !== "object")
+      return "monitor"
+    if (obj.capture === "window")
+      return "window"
+    return "monitor"
+  }
+
+  function focusedAddress(text) {
+    var obj = null
+    try {
+      obj = JSON.parse(String(text || "").trim())
+    } catch (e) {
+      return ""
+    }
+    var list = obj && obj.windows
+    if (!Array.isArray(list))
+      return ""
+    for (var i = 0; i < list.length; i++) {
+      var w = list[i]
+      if (!w || !w.focus)
+        continue
+      var addr = String(w.address || "")
+      if (root.isWindowAddress(addr))
+        return addr
+    }
+    return ""
+  }
+
+  function isWindowAddress(addr) {
+    if (addr.length < 3 || addr.substring(0, 2) !== "0x")
+      return false
+    for (var i = 2; i < addr.length; i++) {
+      var c = addr.charAt(i)
+      if (!((c >= "0" && c <= "9") || (c >= "a" && c <= "f") || (c >= "A" && c <= "F")))
+        return false
+    }
+    return true
+  }
+
+  function startSee(windowAddr) {
+    var cmd = ["kage", "see"]
+    if (windowAddr && windowAddr.length) {
+      cmd.push("--window")
+      cmd.push(windowAddr)
+    }
+    cmd.push("--path")
+    cmd.push(root.rawPath)
+    root.seeJobGen = root.grabGen
+    seeProc.command = cmd
+    seeProc.running = true
+  }
+
+  function captureBusy() {
+    return ensureDirProc.running || windowsProc.running || seeProc.running || rmAnnotatedProc.running
+  }
+
+  function startGrabPipeline() {
+    root.grabGen += 1
+    root.grabSeq += 1
+    root.dirJobGen = root.grabGen
+    ensureDirProc.command = ["install", "-d", "-m", "0700", root.kageDir, root.askRoot, root.issueDir]
+    ensureDirProc.running = true
+  }
+
+  function captureDone() {
+    if (root.pendingGrab) {
+      root.pendingGrab = false
+      root.error = ""
+      root.hasMarks = false
+      root.pendingStrokes = null
+      root.burnGen += 1
+      root.startGrabPipeline()
+      return
+    }
+    root.grabbing = false
+    root.grabFinished()
+  }
 
   function grab(payloadJson) {
     abortQueuedSend()
@@ -81,18 +180,17 @@ Item {
     root.hasMarks = false
     root.pendingStrokes = null
     root.burnGen += 1
-    root.grabGen += 1
+    root.captureMode = root.parseCapture(payloadJson)
     stopMic()
     if (burnProc.running)
       burnProc.running = false
     if (mvBurnProc.running)
       mvBurnProc.running = false
-    if (ensureDirProc.running)
-      ensureDirProc.running = false
-    if (seeProc.running)
-      seeProc.running = false
-    ensureDirProc.command = ["install", "-d", "-m", "0700", root.kageDir, root.askRoot, root.issueDir]
-    ensureDirProc.running = true
+    if (root.captureBusy()) {
+      root.pendingGrab = true
+      return
+    }
+    root.startGrabPipeline()
   }
 
   function startRecording() {
@@ -161,9 +259,9 @@ Item {
   }
 
   function unlinkAnnotated() {
-    root.unlinkJobGen = root.grabGen
     if (rmAnnotatedProc.running)
       return
+    root.unlinkJobGen = root.grabGen
     rmAnnotatedProc.command = ["rm", "-f", root.annotatedPath, root.annotatedTmpPath]
     rmAnnotatedProc.running = true
   }
@@ -415,14 +513,49 @@ Item {
   Process {
     id: ensureDirProc
     onExited: function(exitCode) {
+      if (root.dirJobGen !== root.grabGen)
+        return
       if (exitCode !== 0) {
-        root.grabbing = false
         root.error = "could not create " + root.askRoot
-        root.grabFinished()
+        root.captureDone()
         return
       }
-      seeProc.command = ["kage", "see", "--path", root.rawPath]
-      seeProc.running = true
+      if (root.captureMode === "window") {
+        root.windowsJobGen = root.grabGen
+        windowsProc.command = ["kage", "windows"]
+        windowsProc.running = true
+        return
+      }
+      root.startSee("")
+    }
+  }
+
+  Process {
+    id: windowsProc
+    stdout: StdioCollector {
+      id: windowsOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector {
+      id: windowsErr
+      waitForEnd: true
+    }
+    onExited: function(exitCode) {
+      if (root.windowsJobGen !== root.grabGen)
+        return
+      if (exitCode !== 0) {
+        var wmsg = String(windowsErr.text || windowsOut.text || "").trim()
+        root.error = wmsg.length ? wmsg : ("kage windows failed (" + exitCode + ")")
+        root.captureDone()
+        return
+      }
+      var addr = root.focusedAddress(windowsOut.text)
+      if (!addr.length) {
+        root.error = "no focused window"
+        root.captureDone()
+        return
+      }
+      root.startSee(addr)
     }
   }
 
@@ -437,11 +570,12 @@ Item {
       waitForEnd: true
     }
     onExited: function(exitCode) {
+      if (root.seeJobGen !== root.grabGen)
+        return
       if (exitCode !== 0) {
-        root.grabbing = false
         var msg = String(seeErr.text || seeOut.text || "").trim()
         root.error = msg.length ? msg : ("kage see failed (" + exitCode + ")")
-        root.grabFinished()
+        root.captureDone()
         return
       }
       var snap = null
@@ -451,9 +585,8 @@ Item {
         snap = null
       }
       if (!snap || !snap.path) {
-        root.grabbing = false
         root.error = "kage see returned no path"
-        root.grabFinished()
+        root.captureDone()
         return
       }
       root.snapshot = snap
@@ -520,8 +653,7 @@ Item {
     onExited: function() {
       if (root.unlinkJobGen !== root.grabGen)
         return
-      root.grabbing = false
-      root.grabFinished()
+      root.captureDone()
       flushPendingBurn()
     }
   }

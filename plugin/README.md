@@ -1,6 +1,6 @@
 # kage.ask
 
-Omarchy Quickshell overlay for kage. Summon it, `kage see` grabs the focused monitor, and the PNG stays on screen. Esc hides; `keepLoaded` leaves the plugin mounted.
+Omarchy Quickshell overlay for kage. Summon it, `kage see` grabs the focused monitor (or the focused window with `{"capture":"window"}`), and the PNG stays on screen. Esc hides; `keepLoaded` leaves the plugin mounted. Recapture grabs again in the same session.
 
 This repo is the kage CLI, so the plugin lives in `plugin/` rather than at the git root. Do not add a GUI to the `kage` binary.
 
@@ -20,28 +20,35 @@ omarchy plugin enable kage.ask
 
 ## Summon
 
-Summon, do not toggle. Toggle would close the overlay when you meant to recapture.
+Summon, do not toggle. Toggle would close the overlay when you meant to recapture. A second summon while the overlay is already open grabs again.
 
 ```bash
 omarchy-shell shell summon kage.ask '{"capture":"monitor"}'
+omarchy-shell shell summon kage.ask '{"capture":"window"}'
+omarchy-shell shell call kage.ask grab '{"capture":"monitor"}'
+omarchy-shell shell call kage.ask grab '{"capture":"window"}'
 omarchy-shell shell hide kage.ask
 ```
+
+`{"capture":"window"}` runs `kage see --window` on the focused client. `grab` recaptures while the overlay is open: the mic starts again, the new PNG is the next user image, and the same Grok session continues. Old images stay on disk and in the thread.
 
 Esc hides the overlay. The service stays loaded. Send (button or Ctrl+Enter) creates or resumes a Grok session; the reply streams into the overlay. Voice does not auto-send.
 
 ## Bind
 
-Do not rebind `PRINT`, `SUPER+PRINT`, or `SUPER+CTRL+PRINT`. Suggested chord in `~/.config/hypr/bindings.lua`:
+Do not rebind `PRINT`, `SUPER+PRINT`, or `SUPER+CTRL+PRINT`. Suggested chords in `~/.config/hypr/bindings.lua`:
 
 ```lua
 o.bind("SUPER + SHIFT + A", "Ask kage",
   "omarchy-shell shell summon kage.ask '{\"capture\":\"monitor\"}'")
+o.bind("SUPER + SHIFT + W", "Ask kage (window)",
+  "omarchy-shell shell summon kage.ask '{\"capture\":\"window\"}'")
 ```
 
 Unbind first if that chord is already mapped.
 
 ## Capture
 
-The overlay shells out to `kage see --path …`. It does not call grim, slurp, or `omarchy screenshot`. Snapshots land under `$XDG_RUNTIME_DIR/kage/ask/` at mode 0700.
+The overlay shells out to `kage see --path …` (and `kage see --window ADDRESS --path …` for a focused-window grab). It does not call grim, slurp, or `omarchy screenshot`. Snapshots land under `$XDG_RUNTIME_DIR/kage/ask/` at mode 0700. Recapture writes `raw-2.png` (and later numbered files) so earlier grabs are not overwritten.
 
 Send writes `prompt.txt`, then runs `grok --prompt-json --output-format streaming-json` with `--session-id` (first turn) or `--resume` (later). cwd is `$HOME`. Ask mode uses `--permission-mode dontAsk` and denies kage click/type/press/hotkey. The current session UUID is `~/.config/kage/ask-session` (mode 0600). Screenshots stay files; nothing is base64.

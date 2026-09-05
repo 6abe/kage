@@ -14,7 +14,7 @@ Item {
   property var service: null
 
   property bool opened: false
-  property bool summoning: false
+  property bool capturing: false
   property string loadError: ""
   property var strokes: []
   property var currentStroke: []
@@ -65,15 +65,30 @@ Item {
     return ""
   }
 
-  function open(payloadJson) {
+  function recapturePayload() {
+    var cap = root.service && root.service.captureMode === "window" ? "window" : "monitor"
+    return '{"capture":"' + cap + '"}'
+  }
+
+  function bindService() {
+    if (root.service && typeof root.service.grab === "function")
+      return true
+    var id = (root.manifest && root.manifest.id) || "kage.ask"
+    if (root.shell && typeof root.shell.serviceFor === "function")
+      root.service = root.shell.serviceFor(id)
+    return !!(root.service && typeof root.service.grab === "function")
+  }
+
+  function beginCapture(payloadJson) {
     // Hide first so kage see captures the screen, not this overlay.
     root.loadError = ""
     root.opened = false
-    root.summoning = true
+    root.capturing = true
     root.strokes = []
     root.currentStroke = []
-    if (!root.service || typeof root.service.grab !== "function") {
+    if (!root.bindService()) {
       root.loadError = "kage.ask service is not loaded"
+      root.capturing = false
       root.opened = true
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
       return
@@ -81,12 +96,23 @@ Item {
     root.service.grab(payloadJson)
   }
 
+  function open(payloadJson) {
+    root.beginCapture(payloadJson)
+  }
+
+  function grab(payloadJson) {
+    root.beginCapture(payloadJson)
+    if (!root.service)
+      return "no-service"
+    return root.service.captureMode || "ok"
+  }
+
   function close() {
     if (root.service && typeof root.service.abortQueuedSend === "function")
       root.service.abortQueuedSend()
     if (root.service && typeof root.service.stopMic === "function")
       root.service.stopMic()
-    root.summoning = false
+    root.capturing = false
     root.opened = false
   }
 
@@ -169,9 +195,9 @@ Item {
   Connections {
     target: root.service
     function onGrabFinished() {
-      if (!root.summoning)
+      if (!root.capturing)
         return
-      root.summoning = false
+      root.capturing = false
       root.opened = true
       Qt.callLater(function() {
         keyCatcher.forceActiveFocus()
@@ -277,6 +303,15 @@ Item {
               anchors.verticalCenter: parent.verticalCenter
               color: root.recording ? "#e23d28" : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.25)
               visible: true
+            }
+
+            Button {
+              text: "Recapture"
+              foreground: root.foreground
+              accent: root.accent
+              bordered: true
+              enabled: !root.capturing && root.service && !root.service.grabbing
+              onClicked: root.grab(root.recapturePayload())
             }
 
             Button {
